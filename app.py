@@ -179,20 +179,40 @@ HTML_TEMPLATE = """
     <script src="/static/js/bpmn-modeler.js"></script>
     
     <style>
-        body { font-family: 'Inter', sans-serif; }
+        /* Google Material Dark Theme Variables */
+        :root {
+            --md-sys-color-background: #121212;
+            --md-sys-color-surface: #1e1e1e;
+            --md-sys-color-surface-variant: #2d2d2d;
+            --md-sys-color-primary: #8ab4f8; /* Google Blue 200 */
+            --md-sys-color-on-primary: #002d6f;
+            --md-sys-color-secondary: #e8eaed;
+            --md-sys-color-error: #f28b82; /* Red 200 */
+            --md-sys-color-success: #81c995; /* Green 200 */
+            --md-sys-color-on-surface: #e3e3e3;
+            --md-sys-color-on-surface-variant: #c4c7c5;
+            --md-sys-color-outline: #8e918f;
+        }
+
+        body { 
+            font-family: 'Roboto', 'Inter', sans-serif; 
+            background-color: var(--md-sys-color-background);
+            color: var(--md-sys-color-on-surface);
+        }
+        
         .bpmn-container { 
             height: 100%; 
             width: 100%; 
-            background: white; 
-            color: #1e293b; /* Force dark text inside the white canvas */
+            background: #fff; /* Canvas remains white for contrast */
+            color: #1e293b; 
         }
         .bjs-powered-by { display: none; }
         
-        /* Custom Scrollbar for Dark Mode */
+        /* Custom Scrollbar */
         ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-track { background: #1e293b; }
-        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        ::-webkit-scrollbar-track { background: var(--md-sys-color-background); }
+        ::-webkit-scrollbar-thumb { background: var(--md-sys-color-surface-variant); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--md-sys-color-outline); }
 
         /* --- BPMN Editor Fixes --- */
         
@@ -304,9 +324,44 @@ HTML_TEMPLATE = """
         .review-mode .palette-handle {
             display: none !important;
         }
+
+        /* Active Task Highlight */
+        /* Active Task Highlight */
+        @keyframes blink {
+            0% { opacity: 0.4; stroke-width: 4px; }
+            50% { opacity: 1; stroke-width: 6px; }
+            100% { opacity: 0.4; stroke-width: 4px; }
+        }
+        .djs-element.highlight .djs-visual > :nth-child(1) {
+            stroke: #8ab4f8 !important; /* Google Blue 200 */
+            stroke-width: 4px !important;
+            fill: rgba(138, 180, 248, 0.1) !important;
+            filter: drop-shadow(0 0 8px rgba(138, 180, 248, 0.6));
+            animation: blink 1.5s infinite ease-in-out;
+        }
+
+        /* Fix Element Template/Context Menu Popup Colors */
+        .djs-popup {
+            background: #1e1e1e !important;
+            border: 1px solid #444 !important;
+            color: #e3e3e3 !important;
+        }
+        .djs-popup .entry {
+            color: #e3e3e3 !important;
+        }
+        .djs-popup .entry:hover {
+            background-color: #333 !important;
+            color: #fff !important;
+        }
+        .djs-popup-header {
+            border-bottom: 1px solid #444 !important;
+        }
+        .djs-popup-body .entry.active {
+            background-color: #333 !important;
+        }
     </style>
 </head>
-<body class="bg-slate-900 text-slate-100 h-screen overflow-hidden">
+<body class="h-screen overflow-hidden">
     <div id="root" class="h-full"></div>
 
     <script type="text/babel">
@@ -358,20 +413,17 @@ HTML_TEMPLATE = """
         // 1. Dashboard
         const Dashboard = ({ onNavigate }) => {
             const [processes, setProcesses] = useState([]);
-            const [piStatus, setPiStatus] = useState('CHECKING');
-            const fileInputRef = useRef(null);
+            const [piStatus, setPiStatus] = useState('Checking...');
             
             useEffect(() => {
-                loadProcesses();
+                fetch(`${API_BASE}/processes`)
+                    .then(res => res.json())
+                    .then(data => setProcesses(data));
+                
                 fetch(`${API_BASE}/pi_status`)
                     .then(res => res.json())
-                    .then(data => setPiStatus(data.status))
-                    .catch(() => setPiStatus('ERROR'));
+                    .then(data => setPiStatus(data.status));
             }, []);
-
-            const loadProcesses = () => {
-                fetch(`${API_BASE}/processes`).then(res => res.json()).then(data => setProcesses(data));
-            };
 
             const handleDelete = (id) => {
                 if(confirm('確定要刪除嗎？')) {
@@ -389,75 +441,90 @@ HTML_TEMPLATE = """
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
-                URL.revokeObjectURL(url);
             };
 
             const handleImport = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
                 const reader = new FileReader();
-                reader.onload = async (evt) => {
-                    const xml = evt.target.result;
+                reader.onload = async (e) => {
+                    const text = e.target.result;
                     const name = file.name.replace('.bpmn', '').replace('.xml', '');
                     await fetch(`${API_BASE}/processes`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name, xml_content: xml })
+                        body: JSON.stringify({ name, xml_content: text })
                     });
-                    alert('匯入成功！');
-                    loadProcesses();
+                    // Refresh
+                    const res = await fetch(`${API_BASE}/processes`);
+                    setProcesses(await res.json());
                 };
                 reader.readAsText(file);
-                e.target.value = ''; // Reset input
             };
 
             return (
-                <div className="p-8 max-w-6xl mx-auto">
-                    <div className="flex justify-between items-center mb-8">
+                <div className="p-8 max-w-7xl mx-auto h-full overflow-y-auto">
+                    <div className="flex justify-between items-center mb-10 sticky top-0 bg-[#121212] z-10 py-4 border-b border-white/5">
                         <div className="flex items-center gap-4">
-                            <h1 className="text-3xl font-bold text-blue-400">工業 SOP 指引系統</h1>
-                            <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border ${piStatus === 'CONNECTED' ? 'bg-green-900/30 border-green-500 text-green-400' : 'bg-red-900/30 border-red-500 text-red-400'}`}>
-                                <div className={`w-2 h-2 rounded-full ${piStatus === 'CONNECTED' ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-                                {piStatus === 'CONNECTED' ? 'PI Server 連線正常' : 'PI Server 離線 (Mock)'}
-                            </div>
+                            <div className="w-10 h-10 bg-blue-500/20 rounded-full flex items-center justify-center text-blue-300 font-bold text-xl">S</div>
+                            <h1 className="text-2xl font-medium tracking-wide text-white/90">工業 SOP 指引系統</h1>
                         </div>
-                        <div className="flex gap-4">
-                            <input type="file" ref={fileInputRef} onChange={handleImport} accept=".bpmn,.xml" className="hidden" />
-                            <button onClick={() => fileInputRef.current.click()} className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded shadow flex items-center gap-2">
+                        <div className="flex items-center gap-6">
+                            <div className="flex items-center gap-2 bg-[#1e1e1e] px-4 py-2 rounded-full border border-white/5">
+                                <div className={`w-2 h-2 rounded-full ${piStatus === 'Connected' ? 'bg-[#81c995] animate-pulse' : 'bg-[#f28b82]'}`}></div>
+                                <span className="text-sm text-white/70">{piStatus === 'Connected' ? 'PI Server 連線正常' : 'Mock Mode'}</span>
+                            </div>
+                            <label className="cursor-pointer bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 px-5 py-2 rounded-full text-sm transition flex items-center gap-2">
                                 <span>匯入 SOP</span>
-                            </button>
-                            <button onClick={() => onNavigate('editor')} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded shadow flex items-center gap-2">
-                                <span>+ 新增 SOP</span>
+                                <input type="file" accept=".bpmn,.xml" className="hidden" onChange={handleImport} />
+                            </label>
+                            <button onClick={() => onNavigate('editor')} className="bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-6 py-2 rounded-full font-medium shadow-sm transition flex items-center gap-2">
+                                <span className="text-xl leading-none">+</span>
+                                <span>新增 SOP</span>
                             </button>
                         </div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                         {processes.map(p => {
                             const isRunning = p.session_status === 0;
                             return (
-                                <div key={p.id} className={`bg-slate-800 p-6 rounded-lg border transition shadow-lg flex flex-col ${isRunning ? 'border-green-500/50 shadow-green-900/20' : 'border-slate-700 hover:border-blue-500'}`}>
-                                    <div className="flex-1">
-                                        <div className="flex justify-between items-start">
-                                            <h3 className="text-xl font-semibold mb-2">{p.name}</h3>
-                                            {isRunning && <span className="bg-green-900 text-green-300 text-xs px-2 py-1 rounded-full animate-pulse">執行中</span>}
+                                <div key={p.id} className={`bg-[#1e1e1e] p-6 rounded-2xl border transition-all duration-200 flex flex-col group ${isRunning ? 'border-[#81c995]/50 shadow-[0_4px_20px_rgba(129,201,149,0.1)]' : 'border-white/5 hover:border-white/20 hover:shadow-lg'}`}>
+                                    <div className="flex-1 mb-6">
+                                        <div className="flex justify-between items-start mb-3">
+                                            <h3 className="text-lg font-medium text-white/90 group-hover:text-[#8ab4f8] transition-colors">{p.name}</h3>
+                                            {isRunning && <span className="bg-[#81c995]/20 text-[#81c995] text-xs px-3 py-1 rounded-full font-medium">執行中</span>}
                                         </div>
-                                        <p className="text-slate-400 text-sm mb-4">最後編輯: {p.updated_at}</p>
+                                        <p className="text-white/40 text-xs">最後編輯: {p.updated_at}</p>
                                     </div>
-                                    <div className="flex gap-2 flex-wrap mt-4">
-                                        <button onClick={() => onNavigate('editor', p.id)} className="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-sm flex-1">編輯</button>
-                                        <button onClick={() => onNavigate('operator', p.id)} className={`px-3 py-1 rounded text-sm flex-1 text-white ${isRunning ? 'bg-green-600 hover:bg-green-500' : 'bg-green-700 hover:bg-green-600'}`}>
-                                            {isRunning ? '繼續執行' : '執行'}
+                                    
+                                    <div className="grid grid-cols-2 gap-3 mb-3">
+                                        <button onClick={() => onNavigate('operator', p.id)} className={`col-span-2 py-2.5 rounded-full text-sm font-medium transition ${isRunning ? 'bg-[#81c995] text-[#0f5132] hover:bg-[#a8dab5]' : 'bg-[#8ab4f8] text-[#002d6f] hover:bg-[#aecbfa]'}`}>
+                                            {isRunning ? '繼續執行' : '開始執行'}
                                         </button>
-                                        <button onClick={() => onNavigate('review', p.id)} className="bg-purple-700 hover:bg-purple-600 px-3 py-1 rounded text-sm flex-1">回顧</button>
+                                        <button 
+                                            onClick={() => !isRunning && onNavigate('editor', p.id)} 
+                                            disabled={isRunning}
+                                            className={`py-2 rounded-full text-sm transition ${isRunning ? 'bg-[#2d2d2d] text-white/20 cursor-not-allowed' : 'bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80'}`}
+                                        >
+                                            編輯
+                                        </button>
+                                        <button onClick={() => onNavigate('review', p.id)} className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 py-2 rounded-full text-sm transition">回顧</button>
                                     </div>
-                                    <div className="flex gap-2 mt-2">
-                                        <button onClick={() => handleExport(p)} className="bg-blue-900/50 hover:bg-blue-800 px-3 py-1 rounded text-sm text-blue-200 flex-1 border border-blue-800">匯出</button>
-                                        <button onClick={() => handleDelete(p.id)} className="bg-red-900/50 hover:bg-red-900 px-3 py-1 rounded text-sm text-red-200 flex-1 border border-red-900">刪除</button>
+                                    
+                                    <div className="flex gap-2 pt-3 border-t border-white/5">
+                                        <button onClick={() => handleExport(p)} className="flex-1 text-xs text-white/40 hover:text-[#8ab4f8] py-1 transition">匯出 BPMN</button>
+                                        <button onClick={() => handleDelete(p.id)} className="flex-1 text-xs text-white/40 hover:text-[#f28b82] py-1 transition">刪除</button>
                                     </div>
                                 </div>
                             );
                         })}
-                        {processes.length === 0 && <div className="col-span-full text-center py-12 text-slate-500">尚無 SOP 流程，請點擊右上角新增或匯入。</div>}
+                        {processes.length === 0 && (
+                            <div className="col-span-full flex flex-col items-center justify-center py-20 text-white/30 border-2 border-dashed border-white/10 rounded-3xl">
+                                <div className="text-6xl mb-4">📂</div>
+                                <p>尚無 SOP 流程，請點擊右上角新增或匯入。</p>
+                            </div>
+                        )}
                     </div>
                 </div>
             );
@@ -533,30 +600,46 @@ HTML_TEMPLATE = """
             };
 
             return (
-                <div className="flex h-full flex-col">
-                    <div className="bg-slate-800 p-4 flex justify-between items-center border-b border-slate-700">
+                <div className="flex h-full flex-col bg-[#121212]">
+                    <div className="bg-[#1e1e1e] px-6 py-3 flex justify-between items-center border-b border-white/5">
                         <div className="flex items-center gap-4">
-                            <button onClick={() => onNavigate('dashboard')} className="text-slate-400 hover:text-white">← 返回</button>
-                            <input value={name} onChange={(e) => setName(e.target.value)} className="bg-slate-700 text-white px-3 py-1 rounded border border-slate-600" placeholder="流程名稱" />
+                            <button onClick={() => onNavigate('dashboard')} className="text-white/60 hover:text-white transition flex items-center gap-1">
+                                <span className="text-lg">←</span> 返回
+                            </button>
+                            <input value={name} onChange={(e) => setName(e.target.value)} className="bg-[#2d2d2d] text-white px-4 py-1.5 rounded-full border-none outline-none focus:ring-2 focus:ring-[#8ab4f8]" placeholder="流程名稱" />
                         </div>
-                        <button onClick={handleSave} className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded shadow">儲存流程</button>
+                        <button onClick={handleSave} className="bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-6 py-2 rounded-full font-medium shadow-sm transition">儲存流程</button>
                     </div>
                     <div className="flex-1 flex overflow-hidden">
                         <div className="flex-1 relative bg-white" ref={containerRef}></div>
-                        <div className="w-80 bg-slate-800 border-l border-slate-700 p-4 overflow-y-auto">
-                            <h3 className="font-bold mb-4 text-lg border-b border-slate-700 pb-2">屬性面板</h3>
+                        <div className="w-80 bg-[#1e1e1e] border-l border-white/5 p-6 overflow-y-auto">
+                            <h3 className="font-medium text-white/90 mb-6 text-lg">屬性面板</h3>
                             {selectedElement ? (
                                 <div>
-                                    <div className="mb-4"><label className="block text-sm text-slate-400 mb-1">ID</label><input disabled value={selectedElement.id} className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-500" /></div>
-                                    <div className="mb-4"><label className="block text-sm text-slate-400 mb-1">類型</label><input disabled value={selectedElement.type} className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-500" /></div>
-                                    <div className="mb-4"><label className="block text-sm text-slate-400 mb-1">名稱 (Name)</label><input value={elementName} onChange={(e) => updateElementName(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-white focus:border-blue-500 outline-none" placeholder="輸入名稱..." /></div>
-                                    <div className="mb-4 p-3 bg-slate-700/50 rounded border border-blue-500/30">
-                                        <label className="block text-sm text-blue-300 mb-1 font-bold">PI Tag 設定</label>
-                                        <input value={piTag} onChange={(e) => updatePiTag(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 focus:border-blue-500 outline-none" placeholder="例如: TAG1;TAG2" />
-                                        <p className="text-xs text-slate-400 mt-1">輸入 PI Server 上的 Tag 名稱，多個 Tag 請用分號 (;) 區隔</p>
+                                    <div className="mb-5">
+                                        <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">ID</label>
+                                        <input disabled value={selectedElement.id} className="w-full bg-[#2d2d2d] border-none rounded-lg px-3 py-2 text-white/60 text-sm font-mono" />
+                                    </div>
+                                    <div className="mb-5">
+                                        <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">類型</label>
+                                        <input disabled value={selectedElement.type} className="w-full bg-[#2d2d2d] border-none rounded-lg px-3 py-2 text-white/60 text-sm font-mono" />
+                                    </div>
+                                    <div className="mb-5">
+                                        <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">名稱 (Name)</label>
+                                        <input value={elementName} onChange={(e) => updateElementName(e.target.value)} className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition" placeholder="輸入名稱..." />
+                                    </div>
+                                    <div className="mb-5">
+                                        <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">PI Tag 設定</label>
+                                        <input 
+                                            value={piTag} 
+                                            onChange={(e) => updatePiTag(e.target.value)} 
+                                            className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition" 
+                                            placeholder="例如: SINUSOID; CDT158" 
+                                        />
+                                        <p className="text-white/40 text-xs mt-2">支援多個 Tag，請用分號 (;) 分隔</p>
                                     </div>
                                 </div>
-                            ) : <p className="text-slate-500 text-center mt-10">請選擇一個元素以編輯屬性</p>}
+                            ) : <p className="text-white/40 text-sm">請選擇流程圖中的元件以編輯屬性</p>}
                         </div>
                     </div>
                 </div>
@@ -629,11 +712,6 @@ HTML_TEMPLATE = """
                 const newLog = { time: new Date().toLocaleTimeString(), source, message, value, note };
                 setLogs(prev => {
                     const updatedLogs = [...prev, newLog];
-                    // Save session asynchronously (using current state for task ID might be stale, so we rely on handleComplete to save state properly)
-                    // But for simple logs, we just save logs.
-                    // Actually, let's only save in handleComplete/Skip to ensure consistency, 
-                    // or save here but we need currentTask.id. 
-                    // To simplify, we will save in handleComplete/Skip.
                     return updatedLogs;
                 });
             };
@@ -645,10 +723,17 @@ HTML_TEMPLATE = """
                     try { tag = JSON.parse(docs[0].text).piTag; } catch(e) {}
                 }
                 setCurrentTask({ id: element.id, name: element.businessObject.name || element.id, tag, elementObj: element });
+                
+                // Highlight Logic
                 if (viewerRef.current) {
                     const canvas = viewerRef.current.get('canvas');
-                    // canvas.addMarker(element.id, 'highlight'); // Optional
+                    const registry = viewerRef.current.get('elementRegistry');
+                    // Remove highlight from all elements
+                    registry.forEach(e => canvas.removeMarker(e.id, 'highlight'));
+                    // Add highlight to current
+                    canvas.addMarker(element.id, 'highlight');
                 }
+
                 if (tag) {
                     setLoadingTag(true);
                     try {
@@ -664,13 +749,78 @@ HTML_TEMPLATE = """
             useEffect(() => {
                 if (!viewerRef.current) return;
                 const eventBus = viewerRef.current.get('eventBus');
+                
+                // Lock Diagram: Disable interactions
+                const events = [
+                    'shape.move.start',
+                    'connection.create.start',
+                    'shape.resize.start',
+                    'element.dblclick', // Prevent direct editing
+                    'contextPad.open', 
+                    'palette.create', 
+                    'autoPlace.start'
+                ];
+                const preventDefault = (e) => false;
+                events.forEach(event => eventBus.on(event, 10000, preventDefault));
+
                 const listener = (e) => {
                     handleElementClick(e.element);
-                    viewerRef.current.get('canvas').addMarker(e.element.id, 'highlight');
                 };
                 eventBus.on('element.click', listener);
-                return () => eventBus.off('element.click', listener);
+                return () => {
+                    eventBus.off('element.click', listener);
+                    events.forEach(event => eventBus.off(event, preventDefault));
+                };
             }, [viewerRef.current]);
+
+            const handleRestart = async () => {
+                if(!confirm('確定要重新開始流程嗎？所有紀錄將被清除。')) return;
+                
+                setLogs([]);
+                setIsFinished(false);
+                setNote('');
+                
+                // Reset to Start Event
+                if (viewerRef.current) {
+                    const startEvents = viewerRef.current.get('elementRegistry').filter(e => e.type === 'bpmn:StartEvent');
+                    if (startEvents.length > 0) {
+                        handleElementClick(startEvents[0]);
+                        saveSession([], startEvents[0].id, false);
+                    } else {
+                        setCurrentTask(null);
+                        saveSession([], null, false);
+                    }
+                }
+                addLog('系統', '流程已重置');
+            };
+
+            const handleAbort = async () => {
+                const reason = prompt('請輸入中止原因：');
+                if (reason === null) return; // Cancelled
+                
+                const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `流程中止: ${reason}`, value: '-', note };
+                const updatedLogs = [...logs, newLog];
+                setLogs(updatedLogs);
+                setNote('');
+                
+                // Find End Event to move token there
+                let endEventId = null;
+                if (viewerRef.current) {
+                    const endEvents = viewerRef.current.get('elementRegistry').filter(e => e.type === 'bpmn:EndEvent');
+                    if (endEvents.length > 0) {
+                        endEventId = endEvents[0].id;
+                        // Remove highlight from current
+                        if (currentTask) {
+                            viewerRef.current.get('canvas').removeMarker(currentTask.id, 'highlight');
+                        }
+                    }
+                }
+                
+                setIsFinished(true);
+                setCurrentTask(null);
+                saveSession(updatedLogs, endEventId, true);
+                alert('流程已中止');
+            };
 
             const handleComplete = () => {
                 if (!currentTask) return;
@@ -693,9 +843,10 @@ HTML_TEMPLATE = """
                                 finished = true;
                                 alert('流程已完成！');
                                 setCurrentTask(null);
+                                // Remove highlight on finish
+                                viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
                             } else {
                                 handleElementClick(targetElement);
-                                viewerRef.current.get('canvas').addMarker(targetElement.id, 'highlight');
                                 nextTaskId = targetElement.id;
                             }
                         }
@@ -704,6 +855,7 @@ HTML_TEMPLATE = """
                     alert('流程結束或無後續任務'); 
                     finished = true;
                     setCurrentTask(null);
+                    if(viewerRef.current) viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
                 }
                 setIsFinished(finished);
                 saveSession(updatedLogs, nextTaskId, finished);
@@ -731,9 +883,9 @@ HTML_TEMPLATE = """
                                 finished = true;
                                 alert('流程已完成！');
                                 setCurrentTask(null);
+                                viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
                             } else {
                                 handleElementClick(targetElement);
-                                viewerRef.current.get('canvas').addMarker(targetElement.id, 'highlight');
                                 nextTaskId = targetElement.id;
                             }
                         }
@@ -741,6 +893,7 @@ HTML_TEMPLATE = """
                 } else {
                     finished = true;
                     setCurrentTask(null);
+                    if(viewerRef.current) viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
                 }
                 setIsFinished(finished);
                 saveSession(updatedLogs, nextTaskId, finished);
@@ -758,74 +911,89 @@ HTML_TEMPLATE = """
             };
 
             return (
-                <div className="flex h-full flex-col">
-                    <div className="bg-slate-800 p-4 flex justify-between items-center border-b border-slate-700">
+                <div className="flex h-full flex-col bg-[#121212]">
+                    <div className="bg-[#1e1e1e] px-6 py-3 flex justify-between items-center border-b border-white/5">
                         <div className="flex items-center gap-4">
-                            <button onClick={() => onNavigate('dashboard')} className="text-slate-400 hover:text-white">← 暫存並返回</button>
-                            <h2 className="text-xl font-bold">{processName} (執行模式)</h2>
+                            <button onClick={() => onNavigate('dashboard')} className="text-white/60 hover:text-white transition flex items-center gap-1">
+                                <span className="text-lg">←</span> 暫存並返回
+                            </button>
+                            <h2 className="text-xl font-medium text-white/90">{processName} <span className="text-white/40 text-sm ml-2">(執行模式)</span></h2>
                         </div>
-                        <button onClick={exportCSV} disabled={!isFinished} className={`px-4 py-2 rounded text-white ${isFinished ? 'bg-green-600 hover:bg-green-500' : 'bg-slate-600 cursor-not-allowed'}`}>
-                            {isFinished ? '匯出 CSV' : '未完成不可匯出'}
-                        </button>
+                        <div className="flex gap-3">
+                            {!isFinished && (
+                                <button onClick={handleAbort} className="px-4 py-2 rounded-full font-medium transition bg-[#f28b82] text-[#002d6f] hover:bg-[#f28b82]/90">
+                                    中止流程
+                                </button>
+                            )}
+                            <button onClick={handleRestart} className="px-4 py-2 rounded-full font-medium transition bg-[#f28b82]/10 text-[#f28b82] hover:bg-[#f28b82]/20 border border-[#f28b82]/20">
+                                重新開始
+                            </button>
+                            <button onClick={exportCSV} disabled={!isFinished} className={`px-6 py-2 rounded-full font-medium transition ${isFinished ? 'bg-[#81c995] text-[#0f5132] hover:bg-[#a8dab5]' : 'bg-[#2d2d2d] text-white/30 cursor-not-allowed'}`}>
+                                {isFinished ? '匯出 CSV' : '未完成不可匯出'}
+                            </button>
+                        </div>
                     </div>
                     <div className="flex-1 flex overflow-hidden">
                         <div className="flex-1 bg-white relative operator-mode" ref={containerRef}></div>
-                        <div className="w-96 bg-slate-800 border-l border-slate-700 flex flex-col">
-                            <div className="p-4 border-b border-slate-700 bg-slate-900">
-                                <h3 className="font-bold text-lg mb-2 text-blue-400">當前任務</h3>
+                        <div className="w-96 bg-[#1e1e1e] border-l border-white/5 flex flex-col shadow-xl z-10">
+                            <div className="p-6 border-b border-white/5">
+                                <h3 className="font-medium text-white/90 mb-4 text-lg">當前任務</h3>
                                 {currentTask ? (
-                                    <div>
-                                        <p className="text-xl font-semibold mb-2">{currentTask.name}</p>
-                                        <p className="text-sm text-slate-400">ID: {currentTask.id}</p>
-                                        {currentTask.tag && (
-                                            <div className="mt-4 bg-slate-800 p-3 rounded border border-blue-500/50">
-                                                <p className="text-xs text-blue-300 mb-2">PI Tag 數據 ({currentTask.tag})</p>
-                                                {loadingTag ? <p className="animate-pulse">讀取中...</p> : (
-                                                    <div className="space-y-2">
-                                                        {tagValues.map((tv, idx) => (
-                                                            <div key={idx} className="flex justify-between items-center border-b border-slate-700 pb-1 last:border-0">
-                                                                <span className="text-sm text-slate-400">{tv.tag}</span>
-                                                                <div className="text-right">
-                                                                    <span className="block text-xl font-mono font-bold text-green-400">{tv.value}</span>
-                                                                    <span className="text-[10px] text-slate-500">{tv.source}</span>
-                                                                </div>
-                                                            </div>
-                                                        ))}
+                                    <div className="animate-fade-in">
+                                        <div className="text-2xl font-bold text-[#8ab4f8] mb-4">{currentTask.name}</div>
+                                        
+                                        {loadingTag ? <div className="text-white/60 animate-pulse">讀取數據中...</div> : (
+                                            <div className="space-y-3">
+                                                {tagValues.map((tv, idx) => (
+                                                    <div key={idx} className="bg-[#2d2d2d] p-4 rounded-xl border border-white/5">
+                                                        <div className="text-xs text-white/60 mb-1">{tv.tag}</div>
+                                                        <div className="text-2xl font-mono text-[#81c995]">{tv.value}</div>
+                                                        <div className="text-xs text-white/40 mt-1 flex justify-between">
+                                                            <span>{tv.timestamp.split('T')[1].split('.')[0]}</span>
+                                                            <span>{tv.source}</span>
+                                                        </div>
                                                     </div>
-                                                )}
+                                                ))}
                                             </div>
                                         )}
-                                        <div className="mt-4">
-                                            <label className="block text-sm text-slate-400 mb-1">備註 (Note)</label>
+                                        <div className="mt-6">
+                                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">備註 (Note)</label>
                                             <textarea 
                                                 value={note} 
                                                 onChange={(e) => setNote(e.target.value)} 
-                                                className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white focus:border-blue-500 outline-none h-20 text-sm"
+                                                className="w-full bg-[#2d2d2d] border border-white/10 rounded-xl p-3 text-white focus:border-[#8ab4f8] outline-none h-24 text-sm resize-none"
                                                 placeholder="輸入備註..."
                                             />
                                         </div>
-                                        <div className="mt-4 flex gap-2">
-                                            <button onClick={handleComplete} className="flex-1 bg-blue-600 hover:bg-blue-500 py-2 rounded text-white">完成任務 (下一步)</button>
-                                            <button onClick={handleSkip} className="flex-1 bg-slate-600 hover:bg-slate-500 py-2 rounded text-white">跳過</button>
+                                        <div className="mt-6 flex gap-3">
+                                            <button onClick={handleComplete} className="flex-1 bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] py-3 rounded-full font-medium transition">完成任務</button>
+                                            <button onClick={handleSkip} className="flex-1 bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 py-3 rounded-full font-medium transition">跳過</button>
                                         </div>
                                     </div>
                                 ) : (
                                     <div className="text-center mt-10">
-                                        {isFinished ? <p className="text-green-400 font-bold text-xl">流程已完成</p> : <p className="text-slate-500">點擊流程圖中的任務以開始操作</p>}
+                                        {isFinished ? 
+                                            <div className="text-[#81c995] font-bold text-xl flex flex-col items-center gap-2">
+                                                <span className="text-4xl">🎉</span>
+                                                <span>流程已完成</span>
+                                            </div> : 
+                                            <p className="text-white/40">點擊流程圖中的任務以開始操作</p>
+                                        }
                                     </div>
                                 )}
                             </div>
-                            <div className="flex-1 overflow-y-auto p-4 font-mono text-sm">
-                                <h4 className="text-slate-400 mb-2 sticky top-0 bg-slate-800">執行紀錄</h4>
+                            <div className="flex-1 overflow-y-auto p-6 font-mono text-sm bg-[#121212]">
+                                <h4 className="text-[#8ab4f8] text-xs font-bold uppercase tracking-wider mb-4 sticky top-0 bg-[#121212] py-2">執行紀錄</h4>
                                 {logs.map((l, i) => (
-                                    <div key={i} className="mb-2 border-b border-slate-700/50 pb-1">
-                                        <div className="flex justify-between">
-                                            <span className="text-slate-500">[{l.time}]</span>
-                                            <span className="text-blue-300">{l.source}</span>
+                                    <div key={i} className="mb-4 border-l-2 border-[#2d2d2d] pl-4 relative">
+                                        <div className="absolute -left-[5px] top-1 w-2 h-2 rounded-full bg-[#2d2d2d]"></div>
+                                        <div className="flex justify-between items-baseline mb-1">
+                                            <span className="text-white/40 text-xs">{l.time}</span>
+                                            <span className="text-[#8ab4f8] text-xs font-bold">{l.source}</span>
                                         </div>
-                                        <div className="mt-1">{l.message}</div>
-                                        {l.value !== '-' && <div className="text-green-400 text-xs mt-1">Value: {l.value}</div>}
-                                        {l.note && <div className="text-yellow-200/70 text-xs mt-1 bg-yellow-900/20 p-1 rounded">Note: {l.note}</div>}
+                                        <div className="text-white/80 mb-1">{l.message}</div>
+                                        {l.value !== '-' && <div className="text-[#81c995] text-xs bg-[#81c995]/10 inline-block px-2 py-0.5 rounded">Value: {l.value}</div>}
+                                        {l.note && <div className="text-[#fdd663] text-xs mt-2 bg-[#fdd663]/10 p-2 rounded border border-[#fdd663]/20">Note: {l.note}</div>}
                                     </div>
                                 ))}
                             </div>
@@ -854,6 +1022,15 @@ HTML_TEMPLATE = """
                         setProcessName(data.name);
                         await viewer.importXML(data.xml_content);
                         viewer.get('canvas').zoom('fit-viewport');
+                        
+                        // Lock Diagram
+                        const eventBus = viewer.get('eventBus');
+                        const events = [
+                            'shape.move.start', 'connection.create.start', 'shape.resize.start',
+                            'element.dblclick', 'contextPad.open', 'palette.create', 'autoPlace.start'
+                        ];
+                        events.forEach(event => eventBus.on(event, 10000, () => false));
+                        
                     } catch(err) {
                         console.error(err);
                         alert('流程載入失敗');
@@ -879,14 +1056,16 @@ HTML_TEMPLATE = """
             };
 
             return (
-                <div className="flex h-full flex-col">
-                    <div className="bg-slate-800 p-4 flex justify-between items-center border-b border-slate-700">
+                <div className="flex h-full flex-col bg-[#121212]">
+                    <div className="bg-[#1e1e1e] px-6 py-3 flex justify-between items-center border-b border-white/5">
                         <div className="flex items-center gap-4">
-                            <button onClick={() => onNavigate('dashboard')} className="text-slate-400 hover:text-white">← 返回</button>
-                            <h2 className="text-xl font-bold">{processName} (歷史回顧)</h2>
+                            <button onClick={() => onNavigate('dashboard')} className="text-white/60 hover:text-white transition flex items-center gap-1">
+                                <span className="text-lg">←</span> 返回
+                            </button>
+                            <h2 className="text-xl font-medium text-white/90">{processName} <span className="text-white/40 text-sm ml-2">(歷史回顧)</span></h2>
                         </div>
                         <div className="flex gap-4">
-                            <label className="cursor-pointer bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded text-sm">
+                            <label className="cursor-pointer bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-4 py-2 rounded-full font-medium transition shadow-sm">
                                 匯入 Log (CSV)
                                 <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
                             </label>
@@ -896,14 +1075,18 @@ HTML_TEMPLATE = """
                         <div className="flex-1 bg-white relative review-mode" ref={containerRef}>
                             {!processId && <div className="absolute inset-0 flex items-center justify-center text-slate-400">錯誤：未指定流程 ID</div>}
                         </div>
-                        <div className="w-80 bg-slate-800 border-l border-slate-700 overflow-y-auto p-4">
-                            <h3 className="font-bold mb-4">操作紀錄</h3>
-                            {csvData.length === 0 ? <p className="text-slate-500">請上傳 CSV 檔案</p> : (
-                                <div className="space-y-2">
+                        <div className="w-96 bg-[#1e1e1e] border-l border-white/5 overflow-y-auto p-6">
+                            <h3 className="font-medium text-white/90 mb-4 text-lg">操作紀錄</h3>
+                            {csvData.length === 0 ? <p className="text-white/40 text-center py-10">請上傳 CSV 檔案以檢視紀錄</p> : (
+                                <div className="space-y-3">
                                     {csvData.map((row, i) => (
-                                        <div key={i} className="text-sm border-l-2 border-slate-600 pl-2 hover:bg-slate-700 p-1 rounded cursor-pointer">
-                                            <div className="text-slate-400 text-xs">{row.time}</div>
-                                            <div>{row.message}</div>
+                                        <div key={i} className="text-sm bg-[#2d2d2d] p-3 rounded-xl border border-white/5 hover:border-[#8ab4f8] transition cursor-pointer group">
+                                            <div className="flex justify-between items-center mb-1">
+                                                <span className="text-white/40 text-xs">{row.time}</span>
+                                                <span className="text-[#8ab4f8] text-xs font-bold">{row.source}</span>
+                                            </div>
+                                            <div className="text-white/80 group-hover:text-white">{row.message}</div>
+                                            {row.value && row.value !== '-' && <div className="mt-2 text-[#81c995] text-xs bg-[#81c995]/10 inline-block px-2 py-0.5 rounded">Value: {row.value}</div>}
                                         </div>
                                     ))}
                                 </div>
