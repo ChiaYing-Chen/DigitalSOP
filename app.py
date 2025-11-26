@@ -750,6 +750,7 @@ HTML_TEMPLATE = """
             const [isFinished, setIsFinished] = useState(false);
             const viewerRef = useRef(null);
             const [processName, setProcessName] = useState('');
+            const intervalRef = useRef(null);
 
             useEffect(() => {
                 const viewer = new BpmnJS({ container: containerRef.current });
@@ -785,7 +786,10 @@ HTML_TEMPLATE = """
                     } catch (err) { console.error(err); }
                 };
                 load();
-                return () => viewer.destroy();
+                return () => {
+                    if (intervalRef.current) clearInterval(intervalRef.current);
+                    viewer.destroy();
+                };
             }, [processId]);
 
             const saveSession = async (newLogs, currentTaskId, finished) => {
@@ -807,9 +811,44 @@ HTML_TEMPLATE = """
                     const updatedLogs = [...prev, newLog];
                     return updatedLogs;
                 });
+                return newLog; // Return for immediate usage
+            };
+
+            const updateOverlay = (elementId, value) => {
+                if (!viewerRef.current) return;
+                const overlays = viewerRef.current.get('overlays');
+                overlays.remove({ element: elementId });
+                if (value) {
+                    overlays.add(elementId, {
+                        position: { bottom: 10, right: 10 },
+                        html: `<div style="background: #81c995; color: #0f5132; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">${value}</div>`
+                    });
+                }
+            };
+
+            const fetchTagValue = async (tag) => {
+                try {
+                    const res = await fetch(`${API_BASE}/get_tag_value?tag=${encodeURIComponent(tag)}`);
+                    const data = await res.json();
+                    return data;
+                } catch (e) {
+                    console.error(e);
+                    return [];
+                }
             };
 
             const handleElementClick = async (element) => {
+                // Clear previous interval
+                if (intervalRef.current) {
+                    clearInterval(intervalRef.current);
+                    intervalRef.current = null;
+                }
+                
+                // Clear previous overlays
+                if (viewerRef.current) {
+                    viewerRef.current.get('overlays').clear();
+                }
+
                 const docs = element.businessObject.documentation;
                 let tag = null;
                 if (docs && docs.length > 0 && docs[0].text) {
@@ -830,13 +869,37 @@ HTML_TEMPLATE = """
                 if (tag) {
                     setLoadingTag(true);
                     try {
-                        const res = await fetch(`${API_BASE}/get_tag_value?tag=${encodeURIComponent(tag)}`);
-                        const data = await res.json();
+                        // Initial Fetch
+                        const data = await fetchTagValue(tag);
                         setTagValues(data);
                         const valStr = data.map(d => `${d.tag}=${d.value}`).join(', ');
-                        addLog('PI Server', `讀取 Tag: ${tag}`, valStr);
-                    } catch (e) { addLog('Error', '讀取失敗'); setTagValues([]); } finally { setLoadingTag(false); }
-                } else { setTagValues([]); }
+                        
+                        // Log Start Value
+                        addLog('PI Server', `開始任務: ${element.businessObject.name || element.id}`, valStr, 'Start Value');
+                        
+                        // Update Overlay
+                        if (data.length > 0) {
+                            updateOverlay(element.id, data[0].value);
+                        }
+
+                        // Start Polling (10s)
+                        intervalRef.current = setInterval(async () => {
+                            const polledData = await fetchTagValue(tag);
+                            setTagValues(polledData);
+                            if (polledData.length > 0) {
+                                updateOverlay(element.id, polledData[0].value);
+                            }
+                        }, 10000);
+
+                    } catch (e) { 
+                        addLog('Error', '讀取失敗'); 
+                        setTagValues([]); 
+                    } finally { 
+                        setLoadingTag(false); 
+                    }
+                } else { 
+                    setTagValues([]); 
+                }
             };
 
             useEffect(() => {
@@ -869,6 +932,9 @@ HTML_TEMPLATE = """
             const handleRestart = async () => {
                 if(!confirm('確定要重新開始流程嗎？所有紀錄將被清除。')) return;
                 
+                if (intervalRef.current) clearInterval(intervalRef.current);
+                if (viewerRef.current) viewerRef.current.get('overlays').clear();
+
                 setLogs([]);
                 setIsFinished(false);
                 setNote('');
@@ -891,6 +957,8 @@ HTML_TEMPLATE = """
                 const reason = prompt('請輸入中止原因：');
                 if (reason === null) return; // Cancelled
                 
+                if (intervalRef.current) clearInterval(intervalRef.current);
+                
                 const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `流程中止: ${reason}`, value: '-', note };
                 const updatedLogs = [...logs, newLog];
                 setLogs(updatedLogs);
@@ -905,6 +973,7 @@ HTML_TEMPLATE = """
                         // Remove highlight from current
                         if (currentTask) {
                             viewerRef.current.get('canvas').removeMarker(currentTask.id, 'highlight');
+                            viewerRef.current.get('overlays').clear();
                         }
                     }
                 }
@@ -915,13 +984,25 @@ HTML_TEMPLATE = """
                 alert('流程已中止');
             };
 
-            const handleComplete = () => {
+            const handleComplete = async () => {
                 if (!currentTask) return;
-                const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `完成任務: ${currentTask.name}`, value: '-', note };
+                
+                // Log End Value if tag exists
+                let finalValStr = '-';
+                if (currentTask.tag) {
+                    const data = await fetchTagValue(currentTask.tag);
+                    finalValStr = data.map(d => `${d.tag}=${d.value}`).join(', ');
+                }
+
+                const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `完成任務: ${currentTask.name}`, value: finalValStr, note: note || 'End Value' };
                 const updatedLogs = [...logs, newLog];
                 setLogs(updatedLogs);
                 setNote('');
                 
+                // Clear Interval & Overlays
+                if (intervalRef.current) clearInterval(intervalRef.current);
+                if (viewerRef.current) viewerRef.current.get('overlays').clear();
+
                 const element = currentTask.elementObj;
                 let nextTaskId = null;
                 let finished = false;
@@ -954,12 +1035,23 @@ HTML_TEMPLATE = """
                 saveSession(updatedLogs, nextTaskId, finished);
             };
 
-            const handleSkip = () => {
+            const handleSkip = async () => {
                 if (!currentTask) return;
-                const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `跳過任務: ${currentTask.name}`, value: '-', note };
+                
+                // Log End Value (Skipped)
+                let finalValStr = '-';
+                if (currentTask.tag) {
+                    const data = await fetchTagValue(currentTask.tag);
+                    finalValStr = data.map(d => `${d.tag}=${d.value}`).join(', ');
+                }
+
+                const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `跳過任務: ${currentTask.name}`, value: finalValStr, note: note || 'Skipped (End Value)' };
                 const updatedLogs = [...logs, newLog];
                 setLogs(updatedLogs);
                 setNote('');
+                
+                if (intervalRef.current) clearInterval(intervalRef.current);
+                if (viewerRef.current) viewerRef.current.get('overlays').clear();
                 
                 // Logic same as complete for moving forward
                 const element = currentTask.elementObj;
