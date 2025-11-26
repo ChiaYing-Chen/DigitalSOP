@@ -104,17 +104,29 @@ def save_process():
     name = data.get('name')
     xml_content = data.get('xml_content')
     
-    if not name or not xml_content:
-        return jsonify({'error': 'Missing name or xml_content'}), 400
-        
+    
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     process_id = data.get('id')
+    
+    
     if process_id:
-        c.execute("UPDATE processes SET name=?, xml_content=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (name, xml_content, process_id))
+        if name and xml_content:
+             c.execute("UPDATE processes SET name=?, xml_content=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (name, xml_content, process_id))
+        elif name:
+             c.execute("UPDATE processes SET name=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (name, process_id))
+        elif xml_content:
+             c.execute("UPDATE processes SET xml_content=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (xml_content, process_id))
+        else:
+             conn.close()
+             return jsonify({'error': 'Nothing to update'}), 400
     else:
+        if not name or not xml_content:
+            conn.close()
+            return jsonify({'error': 'Missing name or xml_content'}), 400
         c.execute("INSERT INTO processes (name, xml_content) VALUES (?, ?)", (name, xml_content))
         process_id = c.lastrowid
+        
     conn.commit()
     conn.close()
     return jsonify({'id': process_id, 'message': 'Saved successfully'})
@@ -246,7 +258,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>本地工業 SOP 系統</title>
+    <title>數位流程指引系統</title>
     
     <!-- Local Static Assets -->
     <script src="/static/js/tailwindcss.js"></script>
@@ -519,6 +531,8 @@ HTML_TEMPLATE = """
         const Dashboard = ({ onNavigate }) => {
             const [processes, setProcesses] = useState([]);
             const [piStatus, setPiStatus] = useState('Checking...');
+            const [editingId, setEditingId] = useState(null);
+            const [editName, setEditName] = useState('');
             
             useEffect(() => {
                 fetch(`${API_BASE}/processes`)
@@ -532,6 +546,24 @@ HTML_TEMPLATE = """
                 fetch(`${API_BASE}/pi_status`)
                     .then(res => res.json())
                     .then(data => setPiStatus(data.status));
+            };
+
+            const startEditing = (p) => {
+                setEditingId(p.id);
+                setEditName(p.name);
+            };
+
+            const saveName = async (id) => {
+                if (!editName.trim()) return;
+                await fetch(`${API_BASE}/processes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id, name: editName })
+                });
+                setEditingId(null);
+                // Refresh
+                const res = await fetch(`${API_BASE}/processes`);
+                setProcesses(await res.json());
             };
 
             const handleDelete = (id) => {
@@ -576,9 +608,20 @@ HTML_TEMPLATE = """
                     <div className="flex justify-between items-center mb-10 sticky top-0 bg-[#121212] z-10 py-4 border-b border-white/5">
                         <div className="flex items-center gap-4">
                             <div className="w-10 h-10 bg-blue-500/20 rounded-full flex items-center justify-center text-blue-300 font-bold text-xl">S</div>
-                            <h1 className="text-2xl font-medium tracking-wide text-white/90">工業 SOP 指引系統</h1>
+                            <h1 className="text-2xl font-medium tracking-wide text-white/90">數位流程指引系統</h1>
                         </div>
-                        <div className="flex items-center gap-6">
+                        <div className="flex items-center gap-4">
+                            <button onClick={() => onNavigate('editor')} className="bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-6 py-2 rounded-full font-medium shadow-sm transition flex items-center gap-2">
+                                <span className="text-xl leading-none">+</span>
+                                <span>新增流程</span>
+                            </button>
+                            <label className="cursor-pointer bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 px-5 py-2 rounded-full text-sm transition flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                                </svg>
+                                <span>匯入 BPMN 流程</span>
+                                <input type="file" accept=".bpmn,.xml" className="hidden" onChange={handleImport} />
+                            </label>
                             <div className="flex items-center gap-2 bg-[#1e1e1e] px-4 py-2 rounded-full border border-white/5">
                                 <div className={`w-2 h-2 rounded-full ${piStatus === 'Connected' ? 'bg-[#81c995] animate-pulse' : piStatus === 'Not Configured' ? 'bg-gray-400' : 'bg-[#f28b82]'}`}></div>
                                 <span className="text-sm text-white/70">
@@ -589,14 +632,6 @@ HTML_TEMPLATE = """
                             <button onClick={() => onNavigate('settings')} className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 p-2 rounded-full transition" title="設定">
                                 <span className="text-xl">⚙️</span>
                             </button>
-                            <label className="cursor-pointer bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 px-5 py-2 rounded-full text-sm transition flex items-center gap-2">
-                                <span>匯入 SOP</span>
-                                <input type="file" accept=".bpmn,.xml" className="hidden" onChange={handleImport} />
-                            </label>
-                            <button onClick={() => onNavigate('editor')} className="bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-6 py-2 rounded-full font-medium shadow-sm transition flex items-center gap-2">
-                                <span className="text-xl leading-none">+</span>
-                                <span>新增 SOP</span>
-                            </button>
                         </div>
                     </div>
                     
@@ -606,9 +641,33 @@ HTML_TEMPLATE = """
                             return (
                                 <div key={p.id} className={`bg-[#1e1e1e] p-6 rounded-2xl border transition-all duration-200 flex flex-col group ${isRunning ? 'border-[#81c995]/50 shadow-[0_4px_20px_rgba(129,201,149,0.1)]' : 'border-white/5 hover:border-white/20 hover:shadow-lg'}`}>
                                     <div className="flex-1 mb-6">
-                                        <div className="flex justify-between items-start mb-3">
-                                            <h3 className="text-lg font-medium text-white/90 group-hover:text-[#8ab4f8] transition-colors">{p.name}</h3>
-                                            {isRunning && <span className="bg-[#81c995]/20 text-[#81c995] text-xs px-3 py-1 rounded-full font-medium">執行中</span>}
+                                        <div className="flex justify-between items-start mb-3 h-8">
+                                            {editingId === p.id ? (
+                                                <div className="flex items-center gap-1 w-full">
+                                                    <input 
+                                                        type="text" 
+                                                        value={editName} 
+                                                        onChange={e => setEditName(e.target.value)}
+                                                        className="bg-[#2d2d2d] text-white px-2 py-1 rounded border border-white/10 focus:border-[#8ab4f8] outline-none text-sm w-full"
+                                                        autoFocus
+                                                        onKeyDown={e => { if(e.key === 'Enter') saveName(p.id); else if(e.key === 'Escape') setEditingId(null); }}
+                                                    />
+                                                    <button onClick={() => saveName(p.id)} className="text-[#81c995] hover:text-green-400 px-1">✓</button>
+                                                    <button onClick={() => setEditingId(null)} className="text-[#f28b82] hover:text-red-400 px-1">✕</button>
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center gap-2 group/title w-full">
+                                                    <h3 className="text-lg font-medium text-white/90 group-hover:text-[#8ab4f8] transition-colors truncate" title={p.name}>{p.name}</h3>
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); startEditing(p); }}
+                                                        className="opacity-0 group-hover/title:opacity-100 text-white/40 hover:text-[#8ab4f8] transition"
+                                                        title="重新命名"
+                                                    >
+                                                        ✎
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {isRunning && <span className="bg-[#81c995]/20 text-[#81c995] text-xs px-3 py-1 rounded-full font-medium ml-2 whitespace-nowrap">執行中</span>}
                                         </div>
                                         <p className="text-white/40 text-xs">最後編輯: {p.updated_at}</p>
                                     </div>
@@ -658,6 +717,7 @@ HTML_TEMPLATE = """
             const [elementName, setElementName] = useState('');
             const [showHelp, setShowHelp] = useState(false);
             const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+            const [isFinalEnd, setIsFinalEnd] = useState(false);
 
             const GOOGLE_COLORS = [
                 '#EA4335', '#E91E63', '#9C27B0', '#673AB7', '#3F51B5', '#4285F4', '#03A9F4', 
@@ -701,14 +761,15 @@ HTML_TEMPLATE = """
                                 setPiUnit(data.piUnit || '');
                                 setPiPrecision(data.piPrecision !== undefined ? data.piPrecision : 2);
                                 setTargetUrl(data.targetUrl || '');
+                                setIsFinalEnd(data.isFinalEnd || false);
                             } catch(e) { 
-                                setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl('');
+                                setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl(''); setIsFinalEnd(false);
                             }
                         } else { 
-                            setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl('');
+                            setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl(''); setIsFinalEnd(false);
                         }
                     } else { 
-                        setSelectedElement(null); setElementName(''); setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl('');
+                        setSelectedElement(null); setElementName(''); setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl(''); setIsFinalEnd(false);
                     }
                 });
                 
@@ -766,17 +827,41 @@ HTML_TEMPLATE = """
                 if (selectedElement && modelerRef.current) { modelerRef.current.get('modeling').updateLabel(selectedElement, val); }
             };
 
-            const updateElementProperties = (tag, unit, precision, url) => {
+            const updateElementProperties = (tag, unit, precision, url, finalEnd) => {
                 setPiTag(tag);
                 setPiUnit(unit);
                 setPiPrecision(precision);
                 setTargetUrl(url);
+                setIsFinalEnd(finalEnd);
                 
                 if (selectedElement && modelerRef.current) {
                     const modeling = modelerRef.current.get('modeling');
                     const bpmnFactory = modelerRef.current.get('bpmnFactory');
+                    const elementRegistry = modelerRef.current.get('elementRegistry');
+
+                    // If setting as Final End, uncheck others
+                    if (finalEnd && selectedElement.type === 'bpmn:EndEvent') {
+                        const endEvents = elementRegistry.filter(e => e.type === 'bpmn:EndEvent' && e.id !== selectedElement.id);
+                        let modified = false;
+                        endEvents.forEach(e => {
+                            const docs = e.businessObject.documentation;
+                            if (docs && docs.length > 0 && docs[0].text) {
+                                try {
+                                    const d = JSON.parse(docs[0].text);
+                                    if (d.isFinalEnd) {
+                                        d.isFinalEnd = false;
+                                        const newDoc = bpmnFactory.create('bpmn:Documentation', { text: JSON.stringify(d) });
+                                        modeling.updateProperties(e, { documentation: [newDoc] });
+                                        modified = true;
+                                    }
+                                } catch(err) {}
+                            }
+                        });
+                        if (modified) alert('已移除其他 End Event 的最終標記，以此元件為主');
+                    }
+
                     const newDoc = bpmnFactory.create('bpmn:Documentation', { 
-                        text: JSON.stringify({ piTag: tag, piUnit: unit, piPrecision: parseInt(precision), targetUrl: url }) 
+                        text: JSON.stringify({ piTag: tag, piUnit: unit, piPrecision: parseInt(precision), targetUrl: url, isFinalEnd: finalEnd }) 
                     });
                     modeling.updateProperties(selectedElement, { documentation: [newDoc] });
                 }
@@ -937,11 +1022,27 @@ HTML_TEMPLATE = """
                                             <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">超連結 (Hyperlink)</label>
                                             <input 
                                                 value={targetUrl} 
-                                                onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, e.target.value)} 
+                                                onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, e.target.value, isFinalEnd)} 
                                                 className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition" 
                                                 placeholder="例如: https://google.com" 
                                             />
                                             <p className="text-white/40 text-xs mt-2">執行模式下點擊此物件將開啟網頁。</p>
+                                        </div>
+                                    )}
+
+                                    {/* Final End Config (For End Events) */}
+                                    {selectedElement.type === 'bpmn:EndEvent' && (
+                                        <div className="mb-5">
+                                            <label className="flex items-center gap-2 cursor-pointer bg-[#2d2d2d] p-3 rounded-lg border border-white/10 hover:border-[#8ab4f8] transition">
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={isFinalEnd} 
+                                                    onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, e.target.checked)} 
+                                                    className="w-4 h-4 rounded border-gray-300 text-[#8ab4f8] focus:ring-[#8ab4f8]"
+                                                />
+                                                <span className="text-sm text-white/90 font-medium">最終 END (Final END)</span>
+                                            </label>
+                                            <p className="text-white/40 text-xs mt-2">勾選後，流程必須執行到此節點才算真正完成。</p>
                                         </div>
                                     )}
                                 </div>
@@ -1034,8 +1135,15 @@ HTML_TEMPLATE = """
                 });
             };
 
-            const addLog = (source, message, value = '-', note = '') => {
-                const newLog = { time: new Date().toLocaleTimeString(), source, message, value, note };
+            const [completedTaskIds, setCompletedTaskIds] = useState(new Set());
+
+            useEffect(() => {
+                const ids = new Set(logs.filter(l => l.taskId).map(l => l.taskId));
+                setCompletedTaskIds(ids);
+            }, [logs]);
+
+            const addLog = (source, message, value = '-', note = '', taskId = null) => {
+                const newLog = { time: new Date().toLocaleTimeString(), source, message, value, note, taskId };
                 setLogs(prev => {
                     const updatedLogs = [...prev, newLog];
                     return updatedLogs;
@@ -1072,6 +1180,17 @@ HTML_TEMPLATE = """
                 const num = parseFloat(val);
                 if (isNaN(num)) return val;
                 return `${num.toFixed(precision)}${unit ? ' ' + unit : ''}`;
+            };
+
+            const checkPredecessors = (element) => {
+                if (!element) return false;
+                if (element.type === 'bpmn:StartEvent') return true;
+                
+                const incoming = element.businessObject.incoming;
+                if (!incoming || incoming.length === 0) return true; // Isolated or implicit start
+
+                // Check if at least one incoming flow comes from a completed task
+                return incoming.some(flow => completedTaskIds.has(flow.sourceRef.id));
             };
 
             const handleElementClick = async (element) => {
@@ -1235,7 +1354,7 @@ HTML_TEMPLATE = """
                     events.forEach(event => eventBus.off(event, preventDefault));
                     container.removeEventListener('wheel', handleWheel);
                 };
-            }, [viewerRef.current]);
+            }, [viewerRef.current, completedTaskIds]); // Depend on completedTaskIds for validation updates? No, handleElementClick uses state.
 
             const handleRestart = async () => {
                 if(!confirm('確定要重新開始流程嗎？所有紀錄將被清除。')) return;
@@ -1244,6 +1363,7 @@ HTML_TEMPLATE = """
                 if (viewerRef.current) viewerRef.current.get('overlays').clear();
 
                 setLogs([]);
+                setCompletedTaskIds(new Set());
                 setIsFinished(false);
                 setNote('');
                 
@@ -1302,7 +1422,7 @@ HTML_TEMPLATE = """
                     finalValStr = data.map(d => `${d.tag}=${formatValue(d.value, currentTask.precision, currentTask.unit)}`).join(', ');
                 }
 
-                const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `完成任務: ${currentTask.name}`, value: finalValStr, note: note || 'End Value' };
+                const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `完成任務: ${currentTask.name}`, value: finalValStr, note: note || 'End Value', taskId: currentTask.id };
                 const updatedLogs = [...logs, newLog];
                 setLogs(updatedLogs);
                 setNote('');
@@ -1315,32 +1435,42 @@ HTML_TEMPLATE = """
                 let nextTaskId = null;
                 let finished = false;
 
-                if (element && element.businessObject.outgoing && element.businessObject.outgoing.length > 0) {
+                // Check if this is a Final End Event being completed manually
+                if (element.type === 'bpmn:EndEvent') {
+                    let isFinal = false;
+                    const docs = element.businessObject.documentation;
+                    if (docs && docs.length > 0 && docs[0].text) {
+                        try { isFinal = JSON.parse(docs[0].text).isFinalEnd; } catch(err) {}
+                    }
+                    
+                    if (isFinal) {
+                        finished = true;
+                        alert('流程已完成！');
+                        setCurrentTask(null);
+                        viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
+                    } else {
+                        alert('此分支已結束。');
+                        setCurrentTask(null);
+                        viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
+                    }
+                } else if (element && element.businessObject.outgoing && element.businessObject.outgoing.length > 0) {
                     const nextFlow = element.businessObject.outgoing[0];
                     const targetNode = nextFlow.targetRef;
                     if (viewerRef.current) {
                         const targetElement = viewerRef.current.get('elementRegistry').get(targetNode.id);
                         if (targetElement) {
-                            if (targetElement.type === 'bpmn:EndEvent') {
-                                finished = true;
-                                alert('流程已完成！');
-                                setCurrentTask(null);
-                                // Remove highlight on finish
-                                viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
-                            } else {
-                                handleElementClick(targetElement);
-                                nextTaskId = targetElement.id;
-                            }
+                            handleElementClick(targetElement);
+                            nextTaskId = targetElement.id;
                         }
                     }
                 } else { 
-                    alert('流程結束或無後續任務'); 
-                    finished = true;
+                    alert('無後續任務'); 
                     setCurrentTask(null);
                     if(viewerRef.current) viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
                 }
-                setIsFinished(finished);
+                
                 saveSession(updatedLogs, nextTaskId, finished);
+                if (finished) setIsFinished(true);
             };
 
             const handleSkip = async () => {
@@ -1460,7 +1590,13 @@ HTML_TEMPLATE = """
                                             />
                                         </div>
                                         <div className="mt-6 flex gap-3">
-                                            <button onClick={handleComplete} className="flex-1 bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] py-3 rounded-full font-medium transition">完成任務</button>
+                                            <button 
+                                                onClick={handleComplete} 
+                                                disabled={!checkPredecessors(currentTask.elementObj)}
+                                                className={`flex-1 py-3 rounded-full font-medium transition ${checkPredecessors(currentTask.elementObj) ? 'bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f]' : 'bg-[#2d2d2d] text-white/30 cursor-not-allowed'}`}
+                                            >
+                                                {checkPredecessors(currentTask.elementObj) ? '完成任務' : '請先完成前置任務'}
+                                            </button>
                                             <button onClick={handleSkip} className="flex-1 bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 py-3 rounded-full font-medium transition">跳過</button>
                                         </div>
                                     </div>
