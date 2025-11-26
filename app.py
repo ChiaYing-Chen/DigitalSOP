@@ -3,6 +3,9 @@ import sqlite3
 import json
 import random
 import datetime
+import datetime
+import subprocess
+import platform
 from flask import Flask, render_template_string, request, jsonify, send_from_directory
 from flask_cors import CORS
 
@@ -18,32 +21,15 @@ try:
     # PI.PIConfig.DEFAULT_SERVER_NAME = "MyPIServer" # Uncomment and set if needed
 except ImportError:
     PI_AVAILABLE = False
-    print("PIconnect not found. Using Mock mode.")
+    print("PIconnect not found. PI Server Offline.")
 except Exception as e:
     PI_AVAILABLE = False
-    print(f"PIconnect initialization failed: {e}. Using Mock mode.")
+    print(f"PIconnect initialization failed: {e}. PI Server Offline.")
 
 # --- Database Setup ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS processes
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  name TEXT NOT NULL,
-                  xml_content TEXT NOT NULL,
-                  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS sessions
-                 (process_id INTEGER PRIMARY KEY,
-                  current_task_id TEXT,
-                  logs TEXT,
-                  is_finished BOOLEAN,
-                  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                  FOREIGN KEY(process_id) REFERENCES processes(id) ON DELETE CASCADE)''')
-    conn.commit()
-    conn.close()
-
-init_db()
-
 # --- Routes ---
 
 @app.route('/')
@@ -133,6 +119,44 @@ def save_session():
     conn.close()
     return jsonify({'result': 'success'})
 
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT value FROM settings WHERE key='pi_server_ip'")
+    row = c.fetchone()
+    conn.close()
+    return jsonify({'pi_server_ip': row[0] if row else ''})
+
+@app.route('/api/settings', methods=['POST'])
+def get_pi_status():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT value FROM settings WHERE key='pi_server_ip'")
+    row = c.fetchone()
+    conn.close()
+    
+    ip = row[0] if row else ''
+    if not ip:
+        return jsonify({'status': 'Not Configured'})
+        
+    # Ping Check
+    try:
+        # -n 1 for Windows, -c 1 for Linux/Mac
+        param = '-n' if platform.system().lower() == 'windows' else '-c'
+        command = ['ping', param, '1', ip]
+        
+        # Run ping command
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        if result.returncode == 0:
+            return jsonify({'status': 'Connected'})
+        else:
+            return jsonify({'status': 'Offline'})
+    except Exception as e:
+        print(f"Ping failed: {e}")
+        return jsonify({'status': 'Offline'})
+
 @app.route('/api/get_tag_value')
 def get_tag_value():
     tag_param = request.args.get('tag')
@@ -150,9 +174,9 @@ def get_tag_value():
                     value = point.current_value
                     results.append({'tag': tag_name, 'value': value, 'timestamp': datetime.datetime.now().isoformat(), 'source': 'PI Server'})
             except Exception as e:
-                results.append({'tag': tag_name, 'value': round(random.uniform(20.0, 100.0), 2), 'timestamp': datetime.datetime.now().isoformat(), 'source': 'Mock (Error)'})
+                results.append({'tag': tag_name, 'value': 'Error', 'timestamp': datetime.datetime.now().isoformat(), 'source': 'PI Server (Error)'})
         else:
-            results.append({'tag': tag_name, 'value': round(random.uniform(20.0, 100.0), 2), 'timestamp': datetime.datetime.now().isoformat(), 'source': 'Mock'})
+            results.append({'tag': tag_name, 'value': 'Offline', 'timestamp': datetime.datetime.now().isoformat(), 'source': 'System'})
             
     return jsonify(results)
 
@@ -420,10 +444,14 @@ HTML_TEMPLATE = """
                     .then(res => res.json())
                     .then(data => setProcesses(data));
                 
+                checkStatus();
+            }, []);
+
+            const checkStatus = () => {
                 fetch(`${API_BASE}/pi_status`)
                     .then(res => res.json())
                     .then(data => setPiStatus(data.status));
-            }, []);
+            };
 
             const handleDelete = (id) => {
                 if(confirm('確定要刪除嗎？')) {
@@ -471,9 +499,15 @@ HTML_TEMPLATE = """
                         </div>
                         <div className="flex items-center gap-6">
                             <div className="flex items-center gap-2 bg-[#1e1e1e] px-4 py-2 rounded-full border border-white/5">
-                                <div className={`w-2 h-2 rounded-full ${piStatus === 'Connected' ? 'bg-[#81c995] animate-pulse' : 'bg-[#f28b82]'}`}></div>
-                                <span className="text-sm text-white/70">{piStatus === 'Connected' ? 'PI Server 連線正常' : 'Mock Mode'}</span>
+                                <div className={`w-2 h-2 rounded-full ${piStatus === 'Connected' ? 'bg-[#81c995] animate-pulse' : piStatus === 'Not Configured' ? 'bg-gray-400' : 'bg-[#f28b82]'}`}></div>
+                                <span className="text-sm text-white/70">
+                                    {piStatus === 'Connected' ? 'PI Server 連線正常' : 
+                                     piStatus === 'Not Configured' ? '未設定 PI Server' : 'PI Server 離線'}
+                                </span>
                             </div>
+                            <button onClick={() => onNavigate('settings')} className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 p-2 rounded-full transition" title="設定">
+                                <span className="text-xl">⚙️</span>
+                            </button>
                             <label className="cursor-pointer bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 px-5 py-2 rounded-full text-sm transition flex items-center gap-2">
                                 <span>匯入 SOP</span>
                                 <input type="file" accept=".bpmn,.xml" className="hidden" onChange={handleImport} />
@@ -1097,6 +1131,56 @@ HTML_TEMPLATE = """
             );
         };
 
+        // 5. Settings
+        const Settings = ({ onNavigate }) => {
+            const [ip, setIp] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            useEffect(() => {
+                fetch(`${API_BASE}/settings`)
+                    .then(res => res.json())
+                    .then(data => setIp(data.pi_server_ip));
+            }, []);
+
+            const handleSave = async () => {
+                setLoading(true);
+                await fetch(`${API_BASE}/settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pi_server_ip: ip })
+                });
+                setLoading(false);
+                alert('設定已儲存');
+                onNavigate('dashboard');
+            };
+
+            return (
+                <div className="flex h-full flex-col bg-[#121212] items-center justify-center">
+                    <div className="bg-[#1e1e1e] p-8 rounded-2xl border border-white/5 w-full max-w-md shadow-xl">
+                        <h2 className="text-2xl font-medium text-white/90 mb-6">系統設定</h2>
+                        
+                        <div className="mb-6">
+                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">PI Server IP Address</label>
+                            <input 
+                                value={ip} 
+                                onChange={(e) => setIp(e.target.value)} 
+                                className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-4 py-3 text-white outline-none transition" 
+                                placeholder="例如: 10.122.51.60" 
+                            />
+                            <p className="text-white/40 text-xs mt-2">系統將使用 Ping 指令檢查此 IP 的連線狀態。</p>
+                        </div>
+                        
+                        <div className="flex gap-3">
+                            <button onClick={() => onNavigate('dashboard')} className="flex-1 bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 py-3 rounded-full font-medium transition">取消</button>
+                            <button onClick={handleSave} disabled={loading} className="flex-1 bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] py-3 rounded-full font-medium transition">
+                                {loading ? '儲存中...' : '儲存設定'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         const App = () => {
             const [page, setPage] = useState('dashboard');
             const [activeProcessId, setActiveProcessId] = useState(null);
@@ -1107,6 +1191,7 @@ HTML_TEMPLATE = """
                     {page === 'editor' && <Editor processId={activeProcessId} onNavigate={navigate} />}
                     {page === 'operator' && <Operator processId={activeProcessId} onNavigate={navigate} />}
                     {page === 'review' && <Review processId={activeProcessId} onNavigate={navigate} />}
+                    {page === 'settings' && <Settings onNavigate={navigate} />}
                 </div>
             );
         };
