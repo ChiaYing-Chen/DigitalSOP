@@ -15,6 +15,7 @@ CORS(app)
 DB_FILE = 'sops.db'
 
 # --- PIconnect Integration (Mock Fallback) ---
+PI = None
 try:
     import PIconnect as PI
     PI_AVAILABLE = True
@@ -30,6 +31,41 @@ except Exception as e:
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    
+    # Create processes table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS processes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            xml_content TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Create sessions table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            process_id INTEGER,
+            current_task_id TEXT,
+            logs TEXT,
+            is_finished BOOLEAN DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(process_id) REFERENCES processes(id)
+        )
+    ''')
+    
+    # Create settings table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
 # --- Routes ---
 
 @app.route('/')
@@ -129,6 +165,25 @@ def get_settings():
     return jsonify({'pi_server_ip': row[0] if row else ''})
 
 @app.route('/api/settings', methods=['POST'])
+def save_settings():
+    data = request.json
+    ip = data.get('pi_server_ip')
+    
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    
+    # Check if key exists, insert or update
+    c.execute("SELECT 1 FROM settings WHERE key='pi_server_ip'")
+    if c.fetchone():
+        c.execute("UPDATE settings SET value=? WHERE key='pi_server_ip'", (ip,))
+    else:
+        c.execute("INSERT INTO settings (key, value) VALUES ('pi_server_ip', ?)", (ip,))
+        
+    conn.commit()
+    conn.close()
+    return jsonify({'result': 'success'})
+
+@app.route('/api/pi_status', methods=['GET'])
 def get_pi_status():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -147,7 +202,11 @@ def get_pi_status():
         command = ['ping', param, '1', ip]
         
         # Run ping command
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # creationflags=0x08000000 is CREATE_NO_WINDOW to hide console window on Windows
+        if platform.system().lower() == 'windows':
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000)
+        else:
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
         if result.returncode == 0:
             return jsonify({'status': 'Connected'})
@@ -1204,6 +1263,9 @@ HTML_TEMPLATE = """
 """
 
 if __name__ == '__main__':
+    # Initialize Database
+    init_db()
+    
     # Ensure static folder exists
     if not os.path.exists('static'):
         print("WARNING: 'static' folder not found. Please run download_assets.ps1 first.")
