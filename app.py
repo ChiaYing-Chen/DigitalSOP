@@ -630,7 +630,17 @@ HTML_TEMPLATE = """
             const [name, setName] = useState('New Process');
             const [selectedElement, setSelectedElement] = useState(null);
             const [piTag, setPiTag] = useState('');
+            const [piUnit, setPiUnit] = useState('');
+            const [piPrecision, setPiPrecision] = useState(2);
+            const [targetUrl, setTargetUrl] = useState('');
             const [elementName, setElementName] = useState('');
+            const [showHelp, setShowHelp] = useState(false);
+            const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
+            const GOOGLE_COLORS = [
+                '#EA4335', '#E91E63', '#9C27B0', '#673AB7', '#3F51B5', '#4285F4', '#03A9F4', 
+                '#00BCD4', '#009688', '#34A853', '#8BC34A', '#CDDC39', '#FBBC05', '#FF9800'
+            ];
 
             useEffect(() => {
                 const modeler = new BpmnJS({ container: containerRef.current, keyboard: { bindTo: document } });
@@ -647,7 +657,11 @@ HTML_TEMPLATE = """
                     } else {
                         xml = `<?xml version="1.0" encoding="UTF-8"?><bpmn:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn"><bpmn:process id="Process_1" isExecutable="false"><bpmn:startEvent id="StartEvent_1"/></bpmn:process><bpmndi:BPMNDiagram id="BPMNDiagram_1"><bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_1"><bpmndi:BPMNShape id="_BPMNShape_StartEvent_2" bpmnElement="StartEvent_1"><dc:Bounds x="173" y="102" width="36" height="36"/></bpmndi:BPMNShape></bpmndi:BPMNPlane></bpmndi:BPMNDiagram></bpmn:definitions>`;
                     }
-                    try { await modeler.importXML(xml); modeler.get('canvas').zoom('fit-viewport'); } catch (err) { console.error(err); }
+                    try { 
+                        await modeler.importXML(xml); 
+                        modeler.get('canvas').zoom('fit-viewport'); 
+                        setHasUnsavedChanges(false); // Reset after load
+                    } catch (err) { console.error(err); }
                 };
                 loadDiagram();
 
@@ -659,22 +673,70 @@ HTML_TEMPLATE = """
                         setElementName(element.businessObject.name || '');
                         const docs = element.businessObject.documentation;
                         if (docs && docs.length > 0 && docs[0].text) {
-                            try { setPiTag(JSON.parse(docs[0].text).piTag || ''); } catch(e) { setPiTag(''); }
-                        } else { setPiTag(''); }
-                    } else { setSelectedElement(null); setElementName(''); setPiTag(''); }
+                            try { 
+                                const data = JSON.parse(docs[0].text);
+                                setPiTag(data.piTag || ''); 
+                                setPiUnit(data.piUnit || '');
+                                setPiPrecision(data.piPrecision !== undefined ? data.piPrecision : 2);
+                                setTargetUrl(data.targetUrl || '');
+                            } catch(e) { 
+                                setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl('');
+                            }
+                        } else { 
+                            setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl('');
+                        }
+                    } else { 
+                        setSelectedElement(null); setElementName(''); setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl('');
+                    }
                 });
                 
                 modeler.on('element.changed', (e) => {
                     if (selectedElement && e.element.id === selectedElement.id) { setElementName(e.element.businessObject.name || ''); }
                 });
-                return () => modeler.destroy();
+
+                modeler.on('commandStack.changed', () => {
+                    setHasUnsavedChanges(true);
+                });
+
+                // Mouse Wheel Zoom
+                const handleWheel = (e) => {
+                    e.preventDefault();
+                    const canvas = modeler.get('canvas');
+                    const currentZoom = canvas.zoom();
+                    const factor = e.deltaY > 0 ? 0.995 : 1.005;
+                    
+                    const rect = containerRef.current.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    
+                    canvas.zoom(currentZoom * factor, { x, y });
+                };
+                
+                const container = containerRef.current;
+                container.addEventListener('wheel', handleWheel);
+
+                return () => {
+                    container.removeEventListener('wheel', handleWheel);
+                    modeler.destroy();
+                };
             }, [processId]);
+
+            const handleBack = () => {
+                if (hasUnsavedChanges) {
+                    if (confirm('您有未儲存的變更，確定要離開嗎？')) {
+                        onNavigate('dashboard');
+                    }
+                } else {
+                    onNavigate('dashboard');
+                }
+            };
 
             const handleSave = async () => {
                 const { xml } = await modelerRef.current.saveXML({ format: true });
                 await fetch(`${API_BASE}/processes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: processId, name, xml_content: xml }) });
+                setHasUnsavedChanges(false);
                 alert('儲存成功！');
-                onNavigate('dashboard');
+                // Do NOT navigate back
             };
 
             const updateElementName = (val) => {
@@ -682,13 +744,46 @@ HTML_TEMPLATE = """
                 if (selectedElement && modelerRef.current) { modelerRef.current.get('modeling').updateLabel(selectedElement, val); }
             };
 
-            const updatePiTag = (val) => {
-                setPiTag(val);
+            const updateElementProperties = (tag, unit, precision, url) => {
+                setPiTag(tag);
+                setPiUnit(unit);
+                setPiPrecision(precision);
+                setTargetUrl(url);
+                
                 if (selectedElement && modelerRef.current) {
                     const modeling = modelerRef.current.get('modeling');
                     const bpmnFactory = modelerRef.current.get('bpmnFactory');
-                    const newDoc = bpmnFactory.create('bpmn:Documentation', { text: JSON.stringify({ piTag: val }) });
+                    const newDoc = bpmnFactory.create('bpmn:Documentation', { 
+                        text: JSON.stringify({ piTag: tag, piUnit: unit, piPrecision: parseInt(precision), targetUrl: url }) 
+                    });
                     modeling.updateProperties(selectedElement, { documentation: [newDoc] });
+                }
+            };
+
+            const getLightHex = (hex, factor = 0.2) => {
+                const r = parseInt(hex.slice(1, 3), 16);
+                const g = parseInt(hex.slice(3, 5), 16);
+                const b = parseInt(hex.slice(5, 7), 16);
+                
+                const newR = Math.round(r + (255 - r) * (1 - factor));
+                const newG = Math.round(g + (255 - g) * (1 - factor));
+                const newB = Math.round(b + (255 - b) * (1 - factor));
+                
+                const toHex = (n) => {
+                    const h = n.toString(16);
+                    return h.length === 1 ? '0' + h : h;
+                };
+                
+                return `#${toHex(newR)}${toHex(newG)}${toHex(newB)}`;
+            };
+
+            const updateElementColor = (color) => {
+                if (selectedElement && modelerRef.current) {
+                    const modeling = modelerRef.current.get('modeling');
+                    modeling.setColor(selectedElement, {
+                        stroke: color,
+                        fill: getLightHex(color, 0.2) // 20% strength (very light)
+                    });
                 }
             };
 
@@ -696,15 +791,52 @@ HTML_TEMPLATE = """
                 <div className="flex h-full flex-col bg-[#121212]">
                     <div className="bg-[#1e1e1e] px-6 py-3 flex justify-between items-center border-b border-white/5">
                         <div className="flex items-center gap-4">
-                            <button onClick={() => onNavigate('dashboard')} className="text-white/60 hover:text-white transition flex items-center gap-1">
+                            <button onClick={handleBack} className="text-white/60 hover:text-white transition flex items-center gap-1">
                                 <span className="text-lg">←</span> 返回
                             </button>
-                            <input value={name} onChange={(e) => setName(e.target.value)} className="bg-[#2d2d2d] text-white px-4 py-1.5 rounded-full border-none outline-none focus:ring-2 focus:ring-[#8ab4f8]" placeholder="流程名稱" />
+                            <input value={name} onChange={(e) => { setName(e.target.value); setHasUnsavedChanges(true); }} className="bg-[#2d2d2d] text-white px-4 py-1.5 rounded-full border-none outline-none focus:ring-2 focus:ring-[#8ab4f8]" placeholder="流程名稱" />
+                            {hasUnsavedChanges && <span className="text-[#f28b82] text-xs font-medium animate-pulse">● 未儲存</span>}
                         </div>
-                        <button onClick={handleSave} className="bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-6 py-2 rounded-full font-medium shadow-sm transition">儲存流程</button>
+                        <div className="flex gap-3">
+                            <button onClick={() => setShowHelp(!showHelp)} className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 w-10 h-10 rounded-full font-bold transition flex items-center justify-center" title="BPMN 說明">?</button>
+                            <button onClick={handleSave} className="bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-6 py-2 rounded-full font-medium shadow-sm transition">儲存流程</button>
+                        </div>
                     </div>
-                    <div className="flex-1 flex overflow-hidden">
+                    <div className="flex-1 flex overflow-hidden relative">
                         <div className="flex-1 relative bg-white" ref={containerRef}></div>
+                        
+                        {/* Help Modal */}
+                        {showHelp && (
+                            <div className="absolute top-4 right-80 w-80 bg-[#1e1e1e] border border-white/10 rounded-xl shadow-2xl p-6 z-20 text-white/90 overflow-y-auto max-h-[80%]">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="font-bold text-lg text-[#8ab4f8]">BPMN 元件說明</h3>
+                                    <button onClick={() => setShowHelp(false)} className="text-white/40 hover:text-white">✕</button>
+                                </div>
+                                <div className="space-y-4 text-sm">
+                                    <div>
+                                        <div className="font-bold text-[#81c995] mb-1">Start Event (開始)</div>
+                                        <p className="text-white/60">流程的起點。每個流程至少需要一個開始事件。</p>
+                                    </div>
+                                    <div>
+                                        <div className="font-bold text-[#81c995] mb-1">Task (任務)</div>
+                                        <p className="text-white/60">流程中需要執行的具體工作或步驟。可綁定 PI Tag 顯示即時數據。</p>
+                                    </div>
+                                    <div>
+                                        <div className="font-bold text-[#81c995] mb-1">Gateway (閘道)</div>
+                                        <p className="text-white/60">用於控制流程的分支與合併。例如：根據條件走不同的路徑。</p>
+                                    </div>
+                                    <div>
+                                        <div className="font-bold text-[#81c995] mb-1">End Event (結束)</div>
+                                        <p className="text-white/60">流程的終點。表示該流程路徑已完成。</p>
+                                    </div>
+                                    <div>
+                                        <div className="font-bold text-[#81c995] mb-1">Data Object (資料物件)</div>
+                                        <p className="text-white/60">表示流程中使用的文件或數據。可設定超連結，點擊後開啟外部網頁。</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         <div className="w-80 bg-[#1e1e1e] border-l border-white/5 p-6 overflow-y-auto">
                             <h3 className="font-medium text-white/90 mb-6 text-lg">屬性面板</h3>
                             {selectedElement ? (
@@ -721,16 +853,68 @@ HTML_TEMPLATE = """
                                         <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">名稱 (Name)</label>
                                         <input value={elementName} onChange={(e) => updateElementName(e.target.value)} className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition" placeholder="輸入名稱..." />
                                     </div>
+
+                                    {/* Color Picker */}
+                                    <div className="mb-5">
+                                        <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">外觀設定 (Color)</label>
+                                        <div className="grid grid-cols-7 gap-2">
+                                            {GOOGLE_COLORS.map(color => (
+                                                <button 
+                                                    key={color} 
+                                                    onClick={() => updateElementColor(color)}
+                                                    className="w-6 h-6 rounded-full border border-white/10 hover:scale-110 transition"
+                                                    style={ { backgroundColor: color } }
+                                                />
+                                            ))}
+                                        </div>
+                                    </div>
+                                    
+                                    {/* PI Tag Config (Only for Tasks usually, but enabling for all for flexibility) */}
                                     <div className="mb-5">
                                         <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">PI Tag 設定</label>
                                         <input 
                                             value={piTag} 
-                                            onChange={(e) => updatePiTag(e.target.value)} 
-                                            className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition" 
-                                            placeholder="例如: SINUSOID; CDT158" 
+                                            onChange={(e) => updateElementProperties(e.target.value, piUnit, piPrecision, targetUrl)} 
+                                            className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" 
+                                            placeholder="例如: SINUSOID" 
                                         />
-                                        <p className="text-white/40 text-xs mt-2">支援多個 Tag，請用分號 (;) 分隔</p>
+                                        <div className="flex gap-2">
+                                            <div className="flex-1">
+                                                <label className="block text-[10px] text-white/40 mb-1">工程單位</label>
+                                                <input 
+                                                    value={piUnit} 
+                                                    onChange={(e) => updateElementProperties(piTag, e.target.value, piPrecision, targetUrl)} 
+                                                    className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition text-sm" 
+                                                    placeholder="例如: °C" 
+                                                />
+                                            </div>
+                                            <div className="w-20">
+                                                <label className="block text-[10px] text-white/40 mb-1">小數位數</label>
+                                                <input 
+                                                    type="number"
+                                                    min="0"
+                                                    max="5"
+                                                    value={piPrecision} 
+                                                    onChange={(e) => updateElementProperties(piTag, piUnit, e.target.value, targetUrl)} 
+                                                    className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition text-sm" 
+                                                />
+                                            </div>
+                                        </div>
                                     </div>
+
+                                    {/* Hyperlink Config (For Data Objects) */}
+                                    {(selectedElement.type === 'bpmn:DataObjectReference' || selectedElement.type === 'bpmn:DataStoreReference') && (
+                                        <div className="mb-5">
+                                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">超連結 (Hyperlink)</label>
+                                            <input 
+                                                value={targetUrl} 
+                                                onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, e.target.value)} 
+                                                className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition" 
+                                                placeholder="例如: https://google.com" 
+                                            />
+                                            <p className="text-white/40 text-xs mt-2">執行模式下點擊此物件將開啟網頁。</p>
+                                        </div>
+                                    )}
                                 </div>
                             ) : <p className="text-white/40 text-sm">請選擇流程圖中的元件以編輯屬性</p>}
                         </div>
@@ -837,6 +1021,13 @@ HTML_TEMPLATE = """
                 }
             };
 
+            const formatValue = (val, precision, unit) => {
+                if (val === null || val === undefined || val === 'Error' || val === 'Offline') return val;
+                const num = parseFloat(val);
+                if (isNaN(num)) return val;
+                return `${num.toFixed(precision)}${unit ? ' ' + unit : ''}`;
+            };
+
             const handleElementClick = async (element) => {
                 // Clear previous interval
                 if (intervalRef.current) {
@@ -851,10 +1042,28 @@ HTML_TEMPLATE = """
 
                 const docs = element.businessObject.documentation;
                 let tag = null;
+                let unit = '';
+                let precision = 2;
+                let targetUrl = '';
+
                 if (docs && docs.length > 0 && docs[0].text) {
-                    try { tag = JSON.parse(docs[0].text).piTag; } catch(e) {}
+                    try { 
+                        const data = JSON.parse(docs[0].text);
+                        tag = data.piTag;
+                        unit = data.piUnit || '';
+                        precision = data.piPrecision !== undefined ? data.piPrecision : 2;
+                        targetUrl = data.targetUrl || '';
+                    } catch(e) {}
                 }
-                setCurrentTask({ id: element.id, name: element.businessObject.name || element.id, tag, elementObj: element });
+                
+                // Handle Hyperlink Click
+                if (targetUrl) {
+                    window.open(targetUrl, '_blank');
+                    // We don't return here because we might still want to show details if it's also a task (unlikely but possible)
+                    // But for Data Objects, usually they are just for reference.
+                }
+
+                setCurrentTask({ id: element.id, name: element.businessObject.name || element.id, tag, unit, precision, elementObj: element });
                 
                 // Highlight Logic
                 if (viewerRef.current) {
@@ -872,14 +1081,16 @@ HTML_TEMPLATE = """
                         // Initial Fetch
                         const data = await fetchTagValue(tag);
                         setTagValues(data);
-                        const valStr = data.map(d => `${d.tag}=${d.value}`).join(', ');
+                        
+                        const formattedVal = data.length > 0 ? formatValue(data[0].value, precision, unit) : '-';
+                        const valStr = data.map(d => `${d.tag}=${formatValue(d.value, precision, unit)}`).join(', ');
                         
                         // Log Start Value
                         addLog('PI Server', `開始任務: ${element.businessObject.name || element.id}`, valStr, 'Start Value');
                         
                         // Update Overlay
                         if (data.length > 0) {
-                            updateOverlay(element.id, data[0].value);
+                            updateOverlay(element.id, formattedVal);
                         }
 
                         // Start Polling (10s)
@@ -887,7 +1098,7 @@ HTML_TEMPLATE = """
                             const polledData = await fetchTagValue(tag);
                             setTagValues(polledData);
                             if (polledData.length > 0) {
-                                updateOverlay(element.id, polledData[0].value);
+                                updateOverlay(element.id, formatValue(polledData[0].value, precision, unit));
                             }
                         }, 10000);
 
@@ -923,9 +1134,28 @@ HTML_TEMPLATE = """
                     handleElementClick(e.element);
                 };
                 eventBus.on('element.click', listener);
+
+                // Mouse Wheel Zoom
+                const handleWheel = (e) => {
+                    e.preventDefault();
+                    const canvas = viewerRef.current.get('canvas');
+                    const currentZoom = canvas.zoom();
+                    const factor = e.deltaY > 0 ? 0.995 : 1.005;
+                    
+                    const rect = containerRef.current.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    
+                    canvas.zoom(currentZoom * factor, { x, y });
+                };
+                
+                const container = containerRef.current;
+                container.addEventListener('wheel', handleWheel);
+
                 return () => {
                     eventBus.off('element.click', listener);
                     events.forEach(event => eventBus.off(event, preventDefault));
+                    container.removeEventListener('wheel', handleWheel);
                 };
             }, [viewerRef.current]);
 
@@ -991,7 +1221,7 @@ HTML_TEMPLATE = """
                 let finalValStr = '-';
                 if (currentTask.tag) {
                     const data = await fetchTagValue(currentTask.tag);
-                    finalValStr = data.map(d => `${d.tag}=${d.value}`).join(', ');
+                    finalValStr = data.map(d => `${d.tag}=${formatValue(d.value, currentTask.precision, currentTask.unit)}`).join(', ');
                 }
 
                 const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `完成任務: ${currentTask.name}`, value: finalValStr, note: note || 'End Value' };
@@ -1042,7 +1272,7 @@ HTML_TEMPLATE = """
                 let finalValStr = '-';
                 if (currentTask.tag) {
                     const data = await fetchTagValue(currentTask.tag);
-                    finalValStr = data.map(d => `${d.tag}=${d.value}`).join(', ');
+                    finalValStr = data.map(d => `${d.tag}=${formatValue(d.value, currentTask.precision, currentTask.unit)}`).join(', ');
                 }
 
                 const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `跳過任務: ${currentTask.name}`, value: finalValStr, note: note || 'Skipped (End Value)' };
@@ -1132,7 +1362,9 @@ HTML_TEMPLATE = """
                                                 {tagValues.map((tv, idx) => (
                                                     <div key={idx} className="bg-[#2d2d2d] p-4 rounded-xl border border-white/5">
                                                         <div className="text-xs text-white/60 mb-1">{tv.tag}</div>
-                                                        <div className="text-2xl font-mono text-[#81c995]">{tv.value}</div>
+                                                        <div className="text-2xl font-mono text-[#81c995]">
+                                                            {formatValue(tv.value, currentTask.precision, currentTask.unit)}
+                                                        </div>
                                                         <div className="text-xs text-white/40 mt-1 flex justify-between">
                                                             <span>{tv.timestamp.split('T')[1].split('.')[0]}</span>
                                                             <span>{tv.source}</span>
