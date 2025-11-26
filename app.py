@@ -393,7 +393,6 @@ HTML_TEMPLATE = """
             justify-content: center;
             align-items: center;
         }
-        
         .djs-palette .separator {
             display: none !important;
         }
@@ -408,7 +407,6 @@ HTML_TEMPLATE = """
             display: none !important;
         }
 
-        /* Active Task Highlight */
         /* Active Task Highlight */
         @keyframes blink {
             0% { opacity: 0.4; stroke-width: 4px; }
@@ -442,6 +440,30 @@ HTML_TEMPLATE = """
         .djs-popup-body .entry.active {
             background-color: #333 !important;
         }
+
+        /* Operator Mode Cursor Overrides */
+        .operator-mode .djs-hit,
+        .operator-mode .djs-visual rect, 
+        .operator-mode .djs-visual circle, 
+        .operator-mode .djs-visual polygon, 
+        .operator-mode .djs-visual path,
+        .operator-mode .djs-element { cursor: default !important; }
+        
+        .operator-mode .djs-element.has-hyperlink .djs-hit,
+        .operator-mode .djs-element.has-hyperlink .djs-visual * { cursor: pointer !important; }
+        
+        .operator-mode .djs-cursor-move { cursor: default !important; } /* Disable crosshair */
+        .operator-mode .djs-element:hover .djs-outline { stroke-width: 2px; stroke: #8ab4f8; } /* Optional hover effect */
+        
+        /* Review Mode Cursor Overrides */
+        .review-mode .djs-hit,
+        .review-mode .djs-visual rect, 
+        .review-mode .djs-visual circle, 
+        .review-mode .djs-visual polygon, 
+        .review-mode .djs-visual path,
+        .review-mode .djs-element { cursor: default !important; }
+        
+        .review-mode .djs-cursor-move { cursor: default !important; }
     </style>
 </head>
 <body class="h-screen overflow-hidden">
@@ -874,9 +896,16 @@ HTML_TEMPLATE = """
                                         <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">PI Tag 設定</label>
                                         <input 
                                             value={piTag} 
-                                            onChange={(e) => updateElementProperties(e.target.value, piUnit, piPrecision, targetUrl)} 
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                if (val.split(';').length > 4) {
+                                                    alert('最多只能輸入 4 個 PI Tag');
+                                                    return;
+                                                }
+                                                updateElementProperties(val, piUnit, piPrecision, targetUrl);
+                                            }} 
                                             className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" 
-                                            placeholder="例如: SINUSOID" 
+                                            placeholder="例如: Tag1;Tag2 (最多4個)" 
                                         />
                                         <div className="flex gap-2">
                                             <div className="flex-1">
@@ -967,6 +996,22 @@ HTML_TEMPLATE = """
                             const startEvents = viewer.get('elementRegistry').filter(e => e.type === 'bpmn:StartEvent');
                             if (startEvents.length > 0) handleElementClick(startEvents[0]);
                         }
+                        
+                        // Apply Cursor Styles & Hyperlink Markers
+                        const canvas = viewer.get('canvas');
+                        const elementRegistry = viewer.get('elementRegistry');
+                        elementRegistry.forEach(element => {
+                            const docs = element.businessObject.documentation;
+                            if (docs && docs.length > 0 && docs[0].text) {
+                                try {
+                                    const data = JSON.parse(docs[0].text);
+                                    if (data.targetUrl) {
+                                        canvas.addMarker(element.id, 'has-hyperlink');
+                                    }
+                                } catch(e) {}
+                            }
+                        });
+                        
                     } catch (err) { console.error(err); }
                 };
                 load();
@@ -998,14 +1043,15 @@ HTML_TEMPLATE = """
                 return newLog; // Return for immediate usage
             };
 
-            const updateOverlay = (elementId, value) => {
+            const updateOverlay = (elementId, data, precision, unit) => {
                 if (!viewerRef.current) return;
                 const overlays = viewerRef.current.get('overlays');
                 overlays.remove({ element: elementId });
-                if (value) {
+                if (data && data.length > 0) {
+                    const htmlContent = data.map(d => `<div>${d.tag}: ${formatValue(d.value, precision, unit)}</div>`).join('');
                     overlays.add(elementId, {
                         position: { bottom: 10, right: 10 },
-                        html: `<div style="background: #81c995; color: #0f5132; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">${value}</div>`
+                        html: `<div style="background: #81c995; color: #0f5132; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2); text-align: right; line-height: 1.2;">${htmlContent}</div>`
                     });
                 }
             };
@@ -1029,6 +1075,18 @@ HTML_TEMPLATE = """
             };
 
             const handleElementClick = async (element) => {
+                // Whitelist allowed types for interaction
+                const allowedTypes = [
+                    'bpmn:StartEvent', 'bpmn:EndEvent', 'bpmn:Task', 'bpmn:UserTask', 
+                    'bpmn:ServiceTask', 'bpmn:ManualTask', 'bpmn:ScriptTask', 
+                    'bpmn:BusinessRuleTask', 'bpmn:CallActivity', 'bpmn:SubProcess', 
+                    'bpmn:ExclusiveGateway', 'bpmn:ParallelGateway', 'bpmn:InclusiveGateway', 
+                    'bpmn:ComplexGateway', 'bpmn:EventBasedGateway', 
+                    'bpmn:DataObjectReference', 'bpmn:DataStoreReference'
+                ];
+                
+                if (!allowedTypes.includes(element.type)) return;
+
                 // Clear previous interval
                 if (intervalRef.current) {
                     clearInterval(intervalRef.current);
@@ -1090,7 +1148,7 @@ HTML_TEMPLATE = """
                         
                         // Update Overlay
                         if (data.length > 0) {
-                            updateOverlay(element.id, formattedVal);
+                            updateOverlay(element.id, data, precision, unit);
                         }
 
                         // Start Polling (10s)
@@ -1098,7 +1156,7 @@ HTML_TEMPLATE = """
                             const polledData = await fetchTagValue(tag);
                             setTagValues(polledData);
                             if (polledData.length > 0) {
-                                updateOverlay(element.id, formatValue(polledData[0].value, precision, unit));
+                                updateOverlay(element.id, polledData, precision, unit);
                             }
                         }, 10000);
 
@@ -1134,6 +1192,26 @@ HTML_TEMPLATE = """
                     handleElementClick(e.element);
                 };
                 eventBus.on('element.click', listener);
+
+                // Tooltip for Hyperlinks
+                eventBus.on('element.hover', (e) => {
+                    const docs = e.element.businessObject.documentation;
+                    if (docs && docs.length > 0 && docs[0].text) {
+                        try {
+                            const data = JSON.parse(docs[0].text);
+                            if (data.targetUrl) {
+                                viewerRef.current.get('overlays').add(e.element.id, 'url-tooltip', {
+                                    position: { top: -25, left: 0 },
+                                    html: `<div style="background: rgba(30,30,30,0.9); color: #8ab4f8; padding: 4px 8px; border-radius: 4px; font-size: 11px; border: 1px solid #8ab4f8; pointer-events: none; white-space: nowrap; z-index: 1000;">🔗 ${data.targetUrl}</div>`
+                                });
+                            }
+                        } catch(err) {}
+                    }
+                });
+
+                eventBus.on('element.out', (e) => {
+                    viewerRef.current.get('overlays').remove({ type: 'url-tooltip' });
+                });
 
                 // Mouse Wheel Zoom
                 const handleWheel = (e) => {
@@ -1351,34 +1429,33 @@ HTML_TEMPLATE = """
                     <div className="flex-1 flex overflow-hidden">
                         <div className="flex-1 bg-white relative operator-mode" ref={containerRef}></div>
                         <div className="w-96 bg-[#1e1e1e] border-l border-white/5 flex flex-col shadow-xl z-10">
-                            <div className="p-6 border-b border-white/5">
-                                <h3 className="font-medium text-white/90 mb-4 text-lg">當前任務</h3>
+                            <div className="p-4 border-b border-white/5">
+                                <h3 className="font-medium text-white/90 mb-2 text-lg">當前任務</h3>
                                 {currentTask ? (
                                     <div className="animate-fade-in">
-                                        <div className="text-2xl font-bold text-[#8ab4f8] mb-4">{currentTask.name}</div>
+                                        <div className="text-xl font-bold text-[#8ab4f8] mb-3">{currentTask.name}</div>
                                         
                                         {loadingTag ? <div className="text-white/60 animate-pulse">讀取數據中...</div> : (
-                                            <div className="space-y-3">
+                                            <div className={`grid gap-2 ${tagValues.length >= 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                                                 {tagValues.map((tv, idx) => (
-                                                    <div key={idx} className="bg-[#2d2d2d] p-4 rounded-xl border border-white/5">
-                                                        <div className="text-xs text-white/60 mb-1">{tv.tag}</div>
-                                                        <div className="text-2xl font-mono text-[#81c995]">
+                                                    <div key={idx} className="bg-[#2d2d2d] p-3 rounded-xl border border-white/5">
+                                                        <div className="text-[10px] text-white/60 mb-0.5 truncate" title={tv.tag}>{tv.tag}</div>
+                                                        <div className="text-lg font-mono text-[#81c995] truncate">
                                                             {formatValue(tv.value, currentTask.precision, currentTask.unit)}
                                                         </div>
-                                                        <div className="text-xs text-white/40 mt-1 flex justify-between">
+                                                        <div className="text-[10px] text-white/40 mt-0.5 flex justify-between">
                                                             <span>{tv.timestamp.split('T')[1].split('.')[0]}</span>
-                                                            <span>{tv.source}</span>
                                                         </div>
                                                     </div>
                                                 ))}
                                             </div>
                                         )}
-                                        <div className="mt-6">
-                                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">備註 (Note)</label>
+                                        <div className="mt-3">
+                                            <label className="block text-[10px] font-medium text-[#8ab4f8] mb-1 uppercase tracking-wider">備註 (Note)</label>
                                             <textarea 
                                                 value={note} 
                                                 onChange={(e) => setNote(e.target.value)} 
-                                                className="w-full bg-[#2d2d2d] border border-white/10 rounded-xl p-3 text-white focus:border-[#8ab4f8] outline-none h-24 text-sm resize-none"
+                                                className="w-full bg-[#2d2d2d] border border-white/10 rounded-xl p-2 text-white focus:border-[#8ab4f8] outline-none h-20 text-sm resize-none"
                                                 placeholder="輸入備註..."
                                             />
                                         </div>
@@ -1426,6 +1503,7 @@ HTML_TEMPLATE = """
             const [csvData, setCsvData] = useState([]);
             const viewerRef = useRef(null);
             const [processName, setProcessName] = useState('');
+            const [selectedLogIndex, setSelectedLogIndex] = useState(null);
 
             useEffect(() => {
                 if (!processId) return;
@@ -1447,6 +1525,26 @@ HTML_TEMPLATE = """
                             'element.dblclick', 'contextPad.open', 'palette.create', 'autoPlace.start'
                         ];
                         events.forEach(event => eventBus.on(event, 10000, () => false));
+
+                        // Tooltip for Hyperlinks
+                        eventBus.on('element.hover', (e) => {
+                            const docs = e.element.businessObject.documentation;
+                            if (docs && docs.length > 0 && docs[0].text) {
+                                try {
+                                    const data = JSON.parse(docs[0].text);
+                                    if (data.targetUrl) {
+                                        viewer.get('overlays').add(e.element.id, 'url-tooltip', {
+                                            position: { top: -25, left: 0 },
+                                            html: `<div style="background: rgba(30,30,30,0.9); color: #8ab4f8; padding: 4px 8px; border-radius: 4px; font-size: 11px; border: 1px solid #8ab4f8; pointer-events: none; white-space: nowrap; z-index: 1000;">🔗 ${data.targetUrl}</div>`
+                                        });
+                                    }
+                                } catch(err) {}
+                            }
+                        });
+
+                        eventBus.on('element.out', (e) => {
+                            viewer.get('overlays').remove({ type: 'url-tooltip' });
+                        });
                         
                     } catch(err) {
                         console.error(err);
@@ -1457,20 +1555,126 @@ HTML_TEMPLATE = """
                 return () => viewer.destroy();
             }, [processId]);
 
+            // Robust CSV Parser
+            const parseCSVLine = (text) => {
+                const result = [];
+                let start = 0;
+                let inQuotes = false;
+                for (let i = 0; i < text.length; i++) {
+                    if (text[i] === '"') {
+                        inQuotes = !inQuotes;
+                    } else if (text[i] === ',' && !inQuotes) {
+                        let field = text.substring(start, i).trim();
+                        if (field.startsWith('"') && field.endsWith('"')) {
+                            field = field.substring(1, field.length - 1);
+                        }
+                        result.push(field);
+                        start = i + 1;
+                    }
+                }
+                let lastField = text.substring(start).trim();
+                if (lastField.startsWith('"') && lastField.endsWith('"')) {
+                    lastField = lastField.substring(1, lastField.length - 1);
+                }
+                result.push(lastField);
+                return result;
+            };
+
             const handleFileUpload = (e) => {
                 const file = e.target.files[0];
                 const reader = new FileReader();
                 reader.onload = (evt) => {
                     const text = evt.target.result;
-                    const lines = text.split('\\n').slice(1);
+                    const lines = text.split('\\n').slice(1); // Skip header
                     const data = lines.map(line => {
-                        const [time, source, message, value] = line.split(',');
-                        return { time, source, message, value };
-                    }).filter(x => x.time);
+                        if (!line.trim()) return null;
+                        const cols = parseCSVLine(line);
+                        if (cols.length < 4) return null;
+                        // Format: Time, Source, Message, Value, Note
+                        return { 
+                            time: cols[0], 
+                            source: cols[1], 
+                            message: cols[2], 
+                            value: cols[3], 
+                            note: cols[4] || '' 
+                        };
+                    }).filter(x => x && x.time);
                     setCsvData(data);
                 };
                 reader.readAsText(file);
             };
+
+            const handleLogClick = (row, index) => {
+                setSelectedLogIndex(index);
+                if (!viewerRef.current) return;
+
+                const canvas = viewerRef.current.get('canvas');
+                const elementRegistry = viewerRef.current.get('elementRegistry');
+                const overlays = viewerRef.current.get('overlays');
+
+                // Clear previous
+                overlays.clear();
+                elementRegistry.forEach(e => canvas.removeMarker(e.id, 'highlight'));
+
+                // Extract Task Name from Message
+                // Patterns: "開始任務: Name", "完成任務: Name", "跳過任務: Name"
+                let taskName = row.message;
+                if (taskName.includes(': ')) {
+                    taskName = taskName.split(': ')[1].trim();
+                }
+
+                // Find Element by Name
+                const element = elementRegistry.filter(e => e.businessObject.name === taskName)[0];
+                
+                if (element) {
+                    // Highlight
+                    canvas.addMarker(element.id, 'highlight');
+                    
+                    // Show Overlay if Value exists and is not '-'
+                    if (row.value && row.value !== '-' && row.value !== '"-"') {
+                        // Value format: "Tag1=10.00 Unit, Tag2=20.00 Unit"
+                        // Split by comma but respect if there are other commas (though formatValue doesn't produce commas inside value usually)
+                        // The formatValue output is: `${d.tag}=${val}` joined by ', '
+                        // We can split by ', ' safely enough for now
+                        const parts = row.value.split(', ');
+                        const htmlContent = parts.map(p => `<div>${p}</div>`).join('');
+                        
+                        overlays.add(element.id, {
+                            position: { bottom: 10, right: 10 },
+                            html: `<div style="background: #81c995; color: #0f5132; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2); text-align: right; line-height: 1.2;">${htmlContent}</div>`
+                        });
+                        
+                        // Center view
+                        // canvas.scrollToElement(element); // Optional: might be too jumpy
+                    }
+                }
+            };
+
+            // Keyboard Navigation
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    if (csvData.length === 0) return;
+                    
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setSelectedLogIndex(prev => {
+                            const next = prev === null ? 0 : Math.min(prev + 1, csvData.length - 1);
+                            handleLogClick(csvData[next], next);
+                            return next;
+                        });
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setSelectedLogIndex(prev => {
+                            const next = prev === null ? 0 : Math.max(prev - 1, 0);
+                            handleLogClick(csvData[next], next);
+                            return next;
+                        });
+                    }
+                };
+                
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, [csvData]); // Re-bind when data changes
 
             return (
                 <div className="flex h-full flex-col bg-[#121212]">
@@ -1497,13 +1701,29 @@ HTML_TEMPLATE = """
                             {csvData.length === 0 ? <p className="text-white/40 text-center py-10">請上傳 CSV 檔案以檢視紀錄</p> : (
                                 <div className="space-y-3">
                                     {csvData.map((row, i) => (
-                                        <div key={i} className="text-sm bg-[#2d2d2d] p-3 rounded-xl border border-white/5 hover:border-[#8ab4f8] transition cursor-pointer group">
+                                        <div 
+                                            key={i} 
+                                            onClick={() => handleLogClick(row, i)}
+                                            className={`text-sm p-3 rounded-xl border transition cursor-pointer group ${selectedLogIndex === i ? 'bg-[#2d2d2d] border-[#8ab4f8] ring-1 ring-[#8ab4f8]' : 'bg-[#2d2d2d] border-white/5 hover:border-white/20'}`}
+                                        >
                                             <div className="flex justify-between items-center mb-1">
                                                 <span className="text-white/40 text-xs">{row.time}</span>
                                                 <span className="text-[#8ab4f8] text-xs font-bold">{row.source}</span>
                                             </div>
                                             <div className="text-white/80 group-hover:text-white">{row.message}</div>
-                                            {row.value && row.value !== '-' && <div className="mt-2 text-[#81c995] text-xs bg-[#81c995]/10 inline-block px-2 py-0.5 rounded">Value: {row.value}</div>}
+                                            
+                                            {/* Value Display: Hide if '-' */}
+                                            {row.value && row.value !== '-' && row.value !== '"-"' && (
+                                                <div className="mt-2 text-[#81c995] text-xs bg-[#81c995]/10 inline-block px-2 py-1 rounded w-full">
+                                                    {row.value.split(', ').map((v, idx) => (
+                                                        <div key={idx}>{v}</div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            
+                                            {row.note && row.note !== '""' && !(row.note === 'End Value' && (row.value === '-' || row.value === '"-"')) && (
+                                                <div className="text-[#fdd663] text-xs mt-2 bg-[#fdd663]/10 p-2 rounded border border-[#fdd663]/20">Note: {row.note}</div>
+                                            )}
                                         </div>
                                     ))}
                                 </div>
