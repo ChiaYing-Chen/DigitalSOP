@@ -1,4 +1,5 @@
 import os
+import sys
 import sqlite3
 import json
 import random
@@ -12,7 +13,10 @@ from flask_cors import CORS
 # --- Configuration ---
 app = Flask(__name__, static_folder='static')
 CORS(app)
-DB_FILE = 'sops.db'
+
+# 1. Use absolute path (Avoid IIS file not found error)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(BASE_DIR, 'sops.db')
 
 # --- PIconnect Integration (Mock Fallback) ---
 PI = None
@@ -142,14 +146,27 @@ def delete_process(process_id):
 
 @app.route('/api/sessions/<int:process_id>', methods=['GET'])
 def get_session(process_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT current_task_id, logs, is_finished FROM sessions WHERE process_id=?", (process_id,))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        return jsonify({'current_task_id': row[0], 'logs': json.loads(row[1]), 'is_finished': bool(row[2])})
-    return jsonify(None)
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        # Get the latest session
+        c.execute("SELECT current_task_id, logs, is_finished FROM sessions WHERE process_id=? ORDER BY updated_at DESC LIMIT 1", (process_id,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            logs_data = []
+            try:
+                if row[1]:
+                    logs_data = json.loads(row[1])
+            except Exception as e:
+                print(f"Error parsing logs for process {process_id}: {e}")
+                logs_data = []
+                
+            return jsonify({'current_task_id': row[0], 'logs': logs_data, 'is_finished': bool(row[2])})
+        return jsonify(None)
+    except Exception as e:
+        print(f"Database error in get_session: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/sessions', methods=['POST'])
 def save_session():
@@ -161,8 +178,18 @@ def save_session():
     
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO sessions (process_id, current_task_id, logs, is_finished, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
-              (process_id, current_task_id, logs, is_finished))
+    
+    # Check if session exists
+    c.execute("SELECT process_id FROM sessions WHERE process_id=?", (process_id,))
+    row = c.fetchone()
+    
+    if row:
+        c.execute("UPDATE sessions SET current_task_id=?, logs=?, is_finished=?, updated_at=CURRENT_TIMESTAMP WHERE process_id=?",
+                  (current_task_id, logs, is_finished, process_id))
+    else:
+        c.execute("INSERT INTO sessions (process_id, current_task_id, logs, is_finished, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                  (process_id, current_task_id, logs, is_finished))
+                  
     conn.commit()
     conn.close()
     return jsonify({'result': 'success'})
@@ -261,17 +288,17 @@ HTML_TEMPLATE = """
     <title>數位流程指引系統</title>
     
     <!-- Local Static Assets -->
-    <script src="/static/js/tailwindcss.js"></script>
-    <link rel="stylesheet" href="/static/css/diagram-js.css" />
-    <link rel="stylesheet" href="/static/css/bpmn.css" />
+    <script src="{{ url_for('static', filename='js/tailwindcss.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/diagram-js.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/bpmn.css') }}" />
     
     <!-- React & Babel -->
-    <script src="/static/js/react.js"></script>
-    <script src="/static/js/react-dom.js"></script>
-    <script src="/static/js/babel.js"></script>
+    <script src="{{ url_for('static', filename='js/react.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/react-dom.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/babel.js') }}"></script>
     
     <!-- BPMN-JS -->
-    <script src="/static/js/bpmn-modeler.js"></script>
+    <script src="{{ url_for('static', filename='js/bpmn-modeler.js') }}"></script>
     
     <style>
         /* Google Material Dark Theme Variables */
@@ -432,6 +459,12 @@ HTML_TEMPLATE = """
             filter: drop-shadow(0 0 8px rgba(138, 180, 248, 0.6));
             animation: blink 1.5s infinite ease-in-out;
         }
+        
+        /* Completed Task Style */
+        .djs-element.completed-task .djs-visual > :nth-child(1) {
+            fill: #81c995 !important; /* Green fill matching timeline */
+            stroke: #0f5132 !important;
+        }
 
         /* Fix Element Template/Context Menu Popup Colors */
         .djs-popup {
@@ -485,7 +518,7 @@ HTML_TEMPLATE = """
         const { useState, useEffect, useRef, useMemo } = React;
 
         // --- Utils ---
-        const API_BASE = '/api';
+        const API_BASE = "{{ url_for('index') }}api";
         
         // --- Draggable Palette Logic ---
         const makePaletteDraggable = (container) => {
@@ -524,9 +557,195 @@ HTML_TEMPLATE = """
                 }
             }, 500);
         };
+
+        // --- New Components ---
+
+        // Timeline Viewer
+        const TimelineViewer = ({ logs, headerActions }) => {
+            const scrollRef = useRef(null);
+            
+            useEffect(() => {
+                if (scrollRef.current) {
+                    scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
+                }
+            }, [logs]);
+
+            return (
+                <div className="h-full w-full bg-[#1e1e1e] border-b border-white/10 flex flex-col">
+                    <div className="px-6 py-2 border-b border-white/5 flex justify-between items-center bg-[#252525]">
+                        <div className="flex items-center gap-4">
+                            <h3 className="text-sm font-medium text-white/70 uppercase tracking-wider mr-4">操作紀錄 Timeline</h3>
+                            <div className="flex items-center gap-3 text-xs">
+                                <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#8ab4f8]"></div><span className="text-white/60">任務開始</span></div>
+                                <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#81c995]"></div><span className="text-white/60">任務完成</span></div>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <span className="text-xs text-white/30">{logs.length} 筆紀錄</span>
+                            {headerActions}
+                        </div>
+                    </div>
+                    <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden flex items-start px-6 gap-8 scrollbar-thin pt-4 pb-8" onWheel={(e) => {
+                        if (scrollRef.current) {
+                            scrollRef.current.scrollLeft += e.deltaY;
+                        }
+                    }}>
+                        {logs.length === 0 && (
+                            <div className="text-white/20 text-sm italic w-full text-center">尚無操作紀錄...</div>
+                        )}
+                        {logs.map((log, idx) => (
+                            <div key={idx} className="relative flex flex-col items-center min-w-[120px] group">
+                                {/* Connector Line */}
+                                {idx < logs.length - 1 && (
+                                    <div className="absolute top-[18px] left-[50%] w-[calc(100%+32px)] h-[2px] bg-white/10 -z-0"></div>
+                                )}
+                                
+                                {/* Node */}
+                                <div className={`w-9 h-9 rounded-full border-2 flex items-center justify-center z-10 mb-1 transition-all ${
+                                    log.message.startsWith('任務完成') ? 'bg-[#81c995] border-[#81c995] text-[#0f5132]' :
+                                    log.message.startsWith('任務開始') ? 'bg-[#8ab4f8] border-[#8ab4f8] text-[#002d6f]' :
+                                    log.message.startsWith('任務中止') ? 'bg-[#f28b82] border-[#f28b82] text-[#5c1e1e]' :
+                                    'bg-[#2d2d2d] border-white/20 text-white/60'
+                                }`}>
+                                    {idx + 1}
+                                </div>
+                                
+                                {/* Content */}
+                                <div className="text-center flex flex-col items-center">
+                                    <div className="text-xs font-mono text-white/40 mb-1">{log.time}</div>
+
+                                    {/* Task Name */}
+                                    <div className="text-xs text-white/80 max-w-[140px] truncate mb-1" title={log.message}>
+                                        {log.message.includes(': ') ? log.message.split(': ')[1] : log.message}
+                                    </div>
+
+                                    {/* PI Tag Values (Tooltip) */}
+                                    {log.value && log.value !== '-' && log.value !== '"-"' && (
+                                        <div className="relative group/tooltip mt-1">
+                                            <div className="text-[10px] text-[#fdd663] bg-[#fdd663]/10 px-2 py-1 rounded border border-[#fdd663]/20 whitespace-nowrap cursor-help">
+                                                {log.value.split(', ').length} 筆數據
+                                            </div>
+                                            {/* Tooltip */}
+                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/tooltip:block bg-[#2d2d2d] border border-white/20 rounded-lg p-2 shadow-xl z-50 min-w-[150px]">
+                                                {log.value.split(', ').map((v, i) => (
+                                                    <div key={i} className="text-xs text-[#fdd663] whitespace-nowrap mb-1 last:mb-0 font-mono">
+                                                        {v}
+                                                    </div>
+                                                ))}
+                                                {/* Arrow */}
+                                                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[#2d2d2d]"></div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
         
         // --- Components ---
         
+        // Floating Task Window
+        const FloatingTaskWindow = ({ task, onStart, onEnd, onFinish, onClose, note, setNote, tagValues, loadingTag }) => {
+            if (!task) return null;
+
+            const isRunning = task.status === 'running';
+            const isCompleted = task.status === 'completed';
+            const isEndEvent = task.type === 'bpmn:EndEvent';
+
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
+                    <div 
+                        className="bg-[#1e1e1e] border border-white/10 rounded-2xl shadow-2xl w-[400px] overflow-hidden animate-scale-in"
+                        onClick={e => e.stopPropagation()}
+                    >
+                        {/* Header */}
+                        <div className="px-6 py-4 border-b border-white/10 flex justify-between items-center bg-[#252525]">
+                            <h3 className="text-lg font-bold text-white/90">{task.name}</h3>
+                            <button onClick={onClose} className="text-white/40 hover:text-white transition">✕</button>
+                        </div>
+
+                        {/* Body */}
+                        <div className="p-6">
+                            {/* PI Data Section */}
+                            {task.tag && (
+                                <div className="mb-6 bg-[#121212] rounded-xl p-4 border border-white/5">
+                                    <div className="text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">即時數據 (PI Tag)</div>
+                                    {loadingTag ? (
+                                        <div className="text-white/40 text-sm animate-pulse">讀取中...</div>
+                                    ) : (
+                                        <div className="grid gap-2">
+                                            {tagValues.map((tv, idx) => (
+                                                <div key={idx} className="flex justify-between items-end">
+                                                    <span className="text-white/60 text-sm">{tv.tag}</span>
+                                                    <span className="text-[#81c995] font-mono font-bold">
+                                                        {tv.value !== undefined ? Number(tv.value).toFixed(task.precision) : '-'} <span className="text-sm text-white/40">{task.unit}</span>
+                                                    </span>
+                                                </div>
+                                            ))}
+                                            {tagValues.length === 0 && <div className="text-white/30 text-sm">無數據</div>}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Note Section */}
+                            <div className="mb-6">
+                                <label className="block text-xs font-medium text-white/60 mb-2 uppercase tracking-wider">備註 / 紀錄</label>
+                                <textarea 
+                                    value={note}
+                                    onChange={e => setNote(e.target.value)}
+                                    className="w-full bg-[#2d2d2d] border border-white/10 rounded-xl p-3 text-white focus:border-[#8ab4f8] outline-none h-24 text-sm resize-none"
+                                    placeholder="輸入操作備註..."
+                                    disabled={isCompleted}
+                                />
+                            </div>
+
+                            {/* Actions */}
+                            <div className="flex gap-3">
+                                {isEndEvent ? (
+                                     <button 
+                                        onClick={onFinish}
+                                        className="w-full py-3 rounded-xl font-medium bg-[#f28b82] hover:bg-[#f6aea9] text-[#5c1e1e] transition shadow-lg shadow-red-500/20"
+                                    >
+                                        結束流程
+                                    </button>
+                                ) : (
+                                    <>
+                                        {!isRunning && !isCompleted && (
+                                            <button 
+                                                onClick={onStart}
+                                                className="w-full py-3 rounded-xl font-medium bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] transition shadow-lg shadow-blue-500/20"
+                                            >
+                                                開始任務
+                                            </button>
+                                        )}
+                                        
+                                        {isRunning && (
+                                            <button 
+                                                onClick={onEnd}
+                                                className="w-full py-3 rounded-xl font-medium bg-[#81c995] hover:bg-[#a8dab5] text-[#0f5132] transition shadow-lg shadow-green-500/20"
+                                            >
+                                                完成任務
+                                            </button>
+                                        )}
+
+                                        {isCompleted && (
+                                            <div className="w-full py-3 rounded-xl font-medium bg-[#2d2d2d] text-white/40 text-center border border-white/5 cursor-not-allowed">
+                                                此任務已完成
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         // 1. Dashboard
         const Dashboard = ({ onNavigate }) => {
             const [processes, setProcesses] = useState([]);
@@ -578,7 +797,7 @@ HTML_TEMPLATE = """
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `${p.name}.bpmn`;
+                a.download = `${p.name || 'process'}.bpmn`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
@@ -590,6 +809,10 @@ HTML_TEMPLATE = """
                 const reader = new FileReader();
                 reader.onload = async (e) => {
                     const text = e.target.result;
+                    if (!text.includes('bpmndi:BPMNDiagram')) {
+                        alert('匯入失敗：此 BPMN 檔案缺少圖形佈局資訊 (BPMNDiagram)，無法顯示。');
+                        return;
+                    }
                     const name = file.name.replace('.bpmn', '').replace('.xml', '');
                     await fetch(`${API_BASE}/processes`, {
                         method: 'POST',
@@ -715,7 +938,15 @@ HTML_TEMPLATE = """
             const [piPrecision, setPiPrecision] = useState(2);
             const [targetUrl, setTargetUrl] = useState('');
             const [elementName, setElementName] = useState('');
-            const [showHelp, setShowHelp] = useState(false);
+            const [alwaysOn, setAlwaysOn] = useState(false);
+            
+            // Text Annotation Styles
+            const [textFontSize, setTextFontSize] = useState(12);
+            const [textBold, setTextBold] = useState(false);
+            const [textColor, setTextColor] = useState('#000000');
+            const [textBgColor, setTextBgColor] = useState('transparent');
+            const [nameFontSize, setNameFontSize] = useState(12); // New State for Name Font Size
+
             const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
             const [isFinalEnd, setIsFinalEnd] = useState(false);
 
@@ -762,14 +993,28 @@ HTML_TEMPLATE = """
                                 setPiPrecision(data.piPrecision !== undefined ? data.piPrecision : 2);
                                 setTargetUrl(data.targetUrl || '');
                                 setIsFinalEnd(data.isFinalEnd || false);
+                                setAlwaysOn(data.alwaysOn || false);
+                                
+                                // Load Text Styles
+                                setTextFontSize(data.textFontSize || 12);
+                                setTextBold(data.textBold || false);
+                                setTextColor(data.textColor || '#000000');
+                                setTextBgColor(data.textBgColor || 'transparent');
+                                setNameFontSize(data.nameFontSize || 12);
                             } catch(e) { 
-                                setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl(''); setIsFinalEnd(false);
+                                setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl(''); setIsFinalEnd(false); setAlwaysOn(false);
+                                setTextFontSize(12); setTextBold(false); setTextColor('#000000'); setTextBgColor('transparent');
+                                setNameFontSize(12);
                             }
                         } else { 
-                            setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl(''); setIsFinalEnd(false);
+                            setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl(''); setIsFinalEnd(false); setAlwaysOn(false);
+                            setTextFontSize(12); setTextBold(false); setTextColor('#000000'); setTextBgColor('transparent');
+                            setNameFontSize(12);
                         }
                     } else { 
-                        setSelectedElement(null); setElementName(''); setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl(''); setIsFinalEnd(false);
+                        setSelectedElement(null); setElementName(''); setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl(''); setIsFinalEnd(false); setAlwaysOn(false);
+                        setTextFontSize(12); setTextBold(false); setTextColor('#000000'); setTextBgColor('transparent');
+                        setNameFontSize(12);
                     }
                 });
                 
@@ -827,13 +1072,27 @@ HTML_TEMPLATE = """
                 if (selectedElement && modelerRef.current) { modelerRef.current.get('modeling').updateLabel(selectedElement, val); }
             };
 
-            const updateElementProperties = (tag, unit, precision, url, finalEnd) => {
+            const updateElementProperties = (tag, unit, precision, url, finalEnd, alwaysOnVal, tSize, tBold, tColor, tBg, nSize) => {
                 setPiTag(tag);
                 setPiUnit(unit);
                 setPiPrecision(precision);
                 setTargetUrl(url);
                 setIsFinalEnd(finalEnd);
+                setAlwaysOn(alwaysOnVal);
                 
+                // Text Styles State
+                setTextFontSize(tSize !== undefined ? tSize : textFontSize);
+                setTextBold(tBold !== undefined ? tBold : textBold);
+                setTextColor(tColor !== undefined ? tColor : textColor);
+                setTextBgColor(tBg !== undefined ? tBg : textBgColor);
+                setNameFontSize(nSize !== undefined ? nSize : nameFontSize);
+                
+                const currentFontSize = tSize !== undefined ? tSize : textFontSize;
+                const currentBold = tBold !== undefined ? tBold : textBold;
+                const currentColor = tColor !== undefined ? tColor : textColor;
+                const currentBg = tBg !== undefined ? tBg : textBgColor;
+                const currentNameFontSize = nSize !== undefined ? nSize : nameFontSize;
+
                 if (selectedElement && modelerRef.current) {
                     const modeling = modelerRef.current.get('modeling');
                     const bpmnFactory = modelerRef.current.get('bpmnFactory');
@@ -854,6 +1113,7 @@ HTML_TEMPLATE = """
                                         modeling.updateProperties(e, { documentation: [newDoc] });
                                         modified = true;
                                     }
+
                                 } catch(err) {}
                             }
                         });
@@ -861,7 +1121,20 @@ HTML_TEMPLATE = """
                     }
 
                     const newDoc = bpmnFactory.create('bpmn:Documentation', { 
-                        text: JSON.stringify({ piTag: tag, piUnit: unit, piPrecision: parseInt(precision), targetUrl: url, isFinalEnd: finalEnd }) 
+                        text: JSON.stringify({ 
+                            piTag: tag, 
+                            piUnit: unit, 
+                            piPrecision: parseInt(precision), 
+                            targetUrl: url, 
+                            isFinalEnd: finalEnd, 
+                            alwaysOn: alwaysOnVal,
+                            // Save Text Styles
+                            textFontSize: currentFontSize,
+                            textBold: currentBold,
+                            textColor: currentColor,
+                            textBgColor: currentBg,
+                            nameFontSize: currentNameFontSize
+                        }) 
                     });
                     modeling.updateProperties(selectedElement, { documentation: [newDoc] });
                 }
@@ -894,6 +1167,59 @@ HTML_TEMPLATE = """
                 }
             };
 
+            // Apply Text Styles to SVG
+            useEffect(() => {
+                if (!modelerRef.current) return;
+                
+                const applyStyles = () => {
+                    const elementRegistry = modelerRef.current.get('elementRegistry');
+                    const canvas = modelerRef.current.get('canvas');
+                    
+                    elementRegistry.forEach(element => {
+                        const docs = element.businessObject.documentation;
+                        if (docs && docs.length > 0 && docs[0].text) {
+                            try {
+                                const data = JSON.parse(docs[0].text);
+                                const gfx = canvas.getGraphics(element);
+                                
+                                // 1. Apply TextAnnotation Styles
+                                if (element.type === 'bpmn:TextAnnotation') {
+                                    const text = gfx.querySelector('text');
+                                    if (text) {
+                                        if (data.textFontSize) text.style.fontSize = `${data.textFontSize}px`;
+                                        if (data.textBold) text.style.fontWeight = 'bold';
+                                        else text.style.fontWeight = 'normal';
+                                        if (data.textColor) {
+                                            text.style.fill = data.textColor;
+                                            const path = gfx.querySelector('path');
+                                            if (path) path.style.stroke = data.textColor;
+                                        }
+                                    }
+                                }
+
+                                // 2. Apply Name Font Size (For all elements)
+                                if (data.nameFontSize) {
+                                    // Try to find the label text. In bpmn-js, it's often in a class .djs-label
+                                    const label = gfx.querySelector('.djs-label');
+                                    if (label) {
+                                        label.style.fontSize = `${data.nameFontSize}px`;
+                                    }
+                                }
+                            } catch(e) {}
+                        }
+                    });
+                };
+
+                const eventBus = modelerRef.current.get('eventBus');
+                eventBus.on('element.changed', applyStyles);
+                eventBus.on('import.done', applyStyles);
+                
+                return () => {
+                    eventBus.off('element.changed', applyStyles);
+                    eventBus.off('import.done', applyStyles);
+                };
+            }, [modelerRef.current]); // Re-bind if modeler changes
+
             return (
                 <div className="flex h-full flex-col bg-[#121212]">
                     <div className="bg-[#1e1e1e] px-6 py-3 flex justify-between items-center border-b border-white/5">
@@ -905,7 +1231,7 @@ HTML_TEMPLATE = """
                             {hasUnsavedChanges && <span className="text-[#f28b82] text-xs font-medium animate-pulse">● 未儲存</span>}
                         </div>
                         <div className="flex gap-3">
-                            <button onClick={() => setShowHelp(!showHelp)} className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 w-10 h-10 rounded-full font-bold transition flex items-center justify-center" title="BPMN 說明">?</button>
+                            <button onClick={() => window.open('http://10.122.51.60/MDserve/article/DigitalSOP/BPMN.md', '_blank')} className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 w-10 h-10 rounded-full font-bold transition flex items-center justify-center" title="BPMN 說明">?</button>
                             <button onClick={handleSave} className="bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-6 py-2 rounded-full font-medium shadow-sm transition">儲存流程</button>
                         </div>
                     </div>
@@ -913,68 +1239,94 @@ HTML_TEMPLATE = """
                         <div className="flex-1 relative bg-white" ref={containerRef}></div>
                         
                         {/* Help Modal */}
-                        {showHelp && (
-                            <div className="absolute top-4 right-80 w-80 bg-[#1e1e1e] border border-white/10 rounded-xl shadow-2xl p-6 z-20 text-white/90 overflow-y-auto max-h-[80%]">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h3 className="font-bold text-lg text-[#8ab4f8]">BPMN 元件說明</h3>
-                                    <button onClick={() => setShowHelp(false)} className="text-white/40 hover:text-white">✕</button>
-                                </div>
-                                <div className="space-y-4 text-sm">
-                                    <div>
-                                        <div className="font-bold text-[#81c995] mb-1">Start Event (開始)</div>
-                                        <p className="text-white/60">流程的起點。每個流程至少需要一個開始事件。</p>
-                                    </div>
-                                    <div>
-                                        <div className="font-bold text-[#81c995] mb-1">Task (任務)</div>
-                                        <p className="text-white/60">流程中需要執行的具體工作或步驟。可綁定 PI Tag 顯示即時數據。</p>
-                                    </div>
-                                    <div>
-                                        <div className="font-bold text-[#81c995] mb-1">Gateway (閘道)</div>
-                                        <p className="text-white/60">用於控制流程的分支與合併。例如：根據條件走不同的路徑。</p>
-                                    </div>
-                                    <div>
-                                        <div className="font-bold text-[#81c995] mb-1">End Event (結束)</div>
-                                        <p className="text-white/60">流程的終點。表示該流程路徑已完成。</p>
-                                    </div>
-                                    <div>
-                                        <div className="font-bold text-[#81c995] mb-1">Data Object (資料物件)</div>
-                                        <p className="text-white/60">表示流程中使用的文件或數據。可設定超連結，點擊後開啟外部網頁。</p>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
+
 
                         <div className="w-80 bg-[#1e1e1e] border-l border-white/5 p-6 overflow-y-auto">
                             <h3 className="font-medium text-white/90 mb-6 text-lg">屬性面板</h3>
                             {selectedElement ? (
                                 <div>
                                     <div className="mb-5">
-                                        <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">ID</label>
-                                        <input disabled value={selectedElement.id} className="w-full bg-[#2d2d2d] border-none rounded-lg px-3 py-2 text-white/60 text-sm font-mono" />
-                                    </div>
-                                    <div className="mb-5">
-                                        <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">類型</label>
-                                        <input disabled value={selectedElement.type} className="w-full bg-[#2d2d2d] border-none rounded-lg px-3 py-2 text-white/60 text-sm font-mono" />
-                                    </div>
-                                    <div className="mb-5">
                                         <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">名稱 (Name)</label>
-                                        <input value={elementName} onChange={(e) => updateElementName(e.target.value)} className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition" placeholder="輸入名稱..." />
-                                    </div>
-
-                                    {/* Color Picker */}
-                                    <div className="mb-5">
-                                        <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">外觀設定 (Color)</label>
-                                        <div className="grid grid-cols-7 gap-2">
-                                            {GOOGLE_COLORS.map(color => (
-                                                <button 
-                                                    key={color} 
-                                                    onClick={() => updateElementColor(color)}
-                                                    className="w-6 h-6 rounded-full border border-white/10 hover:scale-110 transition"
-                                                    style={ { backgroundColor: color } }
-                                                />
-                                            ))}
+                                        <input value={elementName} onChange={(e) => updateElementName(e.target.value)} className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" placeholder="輸入名稱..." />
+                                        
+                                        {/* Name Font Size Control */}
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-white/60 text-xs">字體大小</span>
+                                            <select 
+                                                value={nameFontSize} 
+                                                onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, isFinalEnd, alwaysOn, textFontSize, textBold, textColor, textBgColor, parseInt(e.target.value))}
+                                                className="bg-[#2d2d2d] text-white border border-white/10 rounded px-2 py-1 text-xs outline-none"
+                                            >
+                                                {[12, 14, 16, 18, 20, 24, 30, 36].map(s => (
+                                                    <option key={s} value={s}>{s}px</option>
+                                                ))}
+                                            </select>
                                         </div>
                                     </div>
+
+                                    {/* Text Annotation Styling */}
+                                    {selectedElement.type === 'bpmn:TextAnnotation' && (
+                                        <div className="mb-5 border-t border-white/10 pt-4">
+                                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">文字樣式 (Style)</label>
+                                            
+                                            {/* Font Size */}
+                                            <div className="flex items-center justify-between mb-2">
+                                                <span className="text-white/60 text-sm">字體大小</span>
+                                                <select 
+                                                    value={textFontSize} 
+                                                    onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, isFinalEnd, alwaysOn, parseInt(e.target.value), textBold, textColor, textBgColor, nameFontSize)}
+                                                    className="bg-[#2d2d2d] text-white border border-white/10 rounded px-2 py-1 text-sm outline-none"
+                                                >
+                                                    {[12, 14, 16, 18, 20, 24, 30, 36].map(s => (
+                                                        <option key={s} value={s}>{s}px</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            {/* Bold */}
+                                            <label className="flex items-center gap-2 cursor-pointer bg-[#2d2d2d] p-2 rounded-lg border border-white/10 hover:border-[#8ab4f8] transition mb-2">
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={textBold} 
+                                                    onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, isFinalEnd, alwaysOn, textFontSize, e.target.checked, textColor, textBgColor, nameFontSize)}
+                                                    className="accent-[#8ab4f8]" 
+                                                />
+                                                <span className="text-white/80 text-sm font-bold">粗體 (Bold)</span>
+                                            </label>
+
+                                            {/* Text Color */}
+                                            <div className="mb-2">
+                                                <span className="text-white/60 text-sm block mb-1">文字顏色</span>
+                                                <div className="flex gap-1 flex-wrap">
+                                                    {['#000000', '#ffffff', '#ff0000', '#00ff00', '#0000ff', '#ffff00', '#8ab4f8', '#f28b82', '#81c995'].map(c => (
+                                                        <button 
+                                                            key={c}
+                                                            onClick={() => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, isFinalEnd, alwaysOn, textFontSize, textBold, c, textBgColor, nameFontSize)}
+                                                            className={`w-5 h-5 rounded-full border ${textColor === c ? 'border-white scale-110' : 'border-white/10'}`}
+                                                            style={ { backgroundColor: c } }
+                                                        />
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Color Picker (Standard) */}
+                                    {selectedElement.type !== 'bpmn:TextAnnotation' && (
+                                        <div className="mb-5">
+                                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">外觀設定 (Color)</label>
+                                            <div className="grid grid-cols-7 gap-2">
+                                                {GOOGLE_COLORS.map(color => (
+                                                    <button 
+                                                        key={color} 
+                                                        onClick={() => updateElementColor(color)}
+                                                        className="w-6 h-6 rounded-full border border-white/10 hover:scale-110 transition"
+                                                        style={ { backgroundColor: color } }
+                                                    />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                     
                                     {/* PI Tag Config (Only for Tasks usually, but enabling for all for flexibility) */}
                                     <div className="mb-5">
@@ -987,42 +1339,44 @@ HTML_TEMPLATE = """
                                                     alert('最多只能輸入 4 個 PI Tag');
                                                     return;
                                                 }
-                                                updateElementProperties(val, piUnit, piPrecision, targetUrl);
+                                                updateElementProperties(val, piUnit, piPrecision, targetUrl, isFinalEnd, alwaysOn, textFontSize, textBold, textColor, textBgColor, nameFontSize);
                                             }} 
                                             className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" 
                                             placeholder="例如: Tag1;Tag2 (最多4個)" 
                                         />
-                                        <div className="flex gap-2">
-                                            <div className="flex-1">
-                                                <label className="block text-[10px] text-white/40 mb-1">工程單位</label>
-                                                <input 
-                                                    value={piUnit} 
-                                                    onChange={(e) => updateElementProperties(piTag, e.target.value, piPrecision, targetUrl)} 
-                                                    className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition text-sm" 
-                                                    placeholder="例如: °C" 
-                                                />
-                                            </div>
-                                            <div className="w-20">
-                                                <label className="block text-[10px] text-white/40 mb-1">小數位數</label>
-                                                <input 
-                                                    type="number"
-                                                    min="0"
-                                                    max="5"
-                                                    value={piPrecision} 
-                                                    onChange={(e) => updateElementProperties(piTag, piUnit, e.target.value, targetUrl)} 
-                                                    className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition text-sm" 
-                                                />
-                                            </div>
+                                        <input 
+                                            value={piUnit} 
+                                            onChange={(e) => updateElementProperties(piTag, e.target.value, piPrecision, targetUrl, isFinalEnd, alwaysOn, textFontSize, textBold, textColor, textBgColor, nameFontSize)} 
+                                            className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" 
+                                            placeholder="單位 (例如: kg/hr)" 
+                                        />
+                                        <div className="flex items-center gap-2 bg-[#2d2d2d] border border-white/10 rounded-lg px-3 py-2 mb-2">
+                                            <span className="text-white/60 text-sm whitespace-nowrap">小數點位數:</span>
+                                            <input 
+                                                type="number" 
+                                                min="0" 
+                                                max="5"
+                                                value={piPrecision} 
+                                                onChange={(e) => updateElementProperties(piTag, piUnit, parseInt(e.target.value), targetUrl, isFinalEnd, alwaysOn, textFontSize, textBold, textColor, textBgColor, nameFontSize)} 
+                                                className="w-full bg-transparent border-none outline-none text-white text-right"
+                                            />
                                         </div>
+                                        <label className="flex items-center gap-2 cursor-pointer bg-[#2d2d2d] p-2 rounded-lg border border-white/10 hover:border-[#8ab4f8] transition mb-2">
+                                            <input 
+                                                type="checkbox" 
+                                                checked={alwaysOn} 
+                                                onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, isFinalEnd, e.target.checked, textFontSize, textBold, textColor, textBgColor, nameFontSize)} 
+                                                className="w-4 h-4 rounded border-gray-300 text-[#8ab4f8] focus:ring-[#8ab4f8]"
+                                            />
+                                            <span className="text-sm text-white/90 font-medium">Always On (常駐顯示)</span>
+                                        </label>
                                     </div>
-
-                                    {/* Hyperlink Config (For Data Objects) */}
                                     {(selectedElement.type === 'bpmn:DataObjectReference' || selectedElement.type === 'bpmn:DataStoreReference') && (
                                         <div className="mb-5">
                                             <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">超連結 (Hyperlink)</label>
                                             <input 
                                                 value={targetUrl} 
-                                                onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, e.target.value, isFinalEnd)} 
+                                                onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, e.target.value, isFinalEnd, alwaysOn, textFontSize, textBold, textColor, textBgColor, nameFontSize)} 
                                                 className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition" 
                                                 placeholder="例如: https://google.com" 
                                             />
@@ -1037,7 +1391,7 @@ HTML_TEMPLATE = """
                                                 <input 
                                                     type="checkbox" 
                                                     checked={isFinalEnd} 
-                                                    onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, e.target.checked)} 
+                                                    onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, e.target.checked, alwaysOn, textFontSize, textBold, textColor, textBgColor, nameFontSize)} 
                                                     className="w-4 h-4 rounded border-gray-300 text-[#8ab4f8] focus:ring-[#8ab4f8]"
                                                 />
                                                 <span className="text-sm text-white/90 font-medium">最終 END (Final END)</span>
@@ -1051,583 +1405,749 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
             );
+
         };
 
-        // 3. Operator (Execution Mode)
+        // 3. Operator Mode (Execution)
         const Operator = ({ processId, onNavigate }) => {
             const containerRef = useRef(null);
+            const viewerRef = useRef(null);
+            const [process, setProcess] = useState(null);
             const [logs, setLogs] = useState([]);
-            const [currentTask, setCurrentTask] = useState(null);
+            const [currentRunningTaskId, setCurrentRunningTaskId] = useState(null); 
+            const [isFinished, setIsFinished] = useState(false);
+            
+            // Floating Window State
+            const [showWindow, setShowWindow] = useState(false);
+            const [windowTask, setWindowTask] = useState(null); 
+            const [note, setNote] = useState('');
             const [tagValues, setTagValues] = useState([]);
             const [loadingTag, setLoadingTag] = useState(false);
-            const [note, setNote] = useState('');
-            const [isFinished, setIsFinished] = useState(false);
-            const viewerRef = useRef(null);
-            const [processName, setProcessName] = useState('');
-            const intervalRef = useRef(null);
+
+            // Zoom
+            const handleZoom = (delta) => {
+                if (viewerRef.current) {
+                    const canvas = viewerRef.current.get('canvas');
+                    canvas.zoom(canvas.zoom() + delta);
+                }
+            };
+
+            const logsRef = useRef(logs);
+            const runningTaskRef = useRef(currentRunningTaskId);
+
+            useEffect(() => { logsRef.current = logs; }, [logs]);
+            useEffect(() => { runningTaskRef.current = currentRunningTaskId; }, [currentRunningTaskId]);
+
+            // Check Predecessors
+            const checkPredecessors = (element, currentLogs) => {
+                if (!element || !element.incoming || element.incoming.length === 0) return true; 
+                return element.incoming.every(connection => {
+                    if (connection.source.type === 'bpmn:StartEvent') return true;
+                    const sourceName = connection.source.businessObject.name;
+                    return currentLogs.some(l => l.message.startsWith('任務完成') && l.message.includes(sourceName));
+                });
+            };
 
             useEffect(() => {
-                const viewer = new BpmnJS({ container: containerRef.current });
-                viewerRef.current = viewer;
                 const load = async () => {
-                    const res = await fetch(`${API_BASE}/processes/${processId}`);
-                    const data = await res.json();
-                    setProcessName(data.name);
+                    if (!processId) return;
+                    
+                    // 1. Get Process
+                    const pRes = await fetch(`${API_BASE}/processes/${processId}`);
+                    const pData = await pRes.json();
+                    setProcess(pData);
+
+                    // 2. Get Session
+                    const sRes = await fetch(`${API_BASE}/sessions/${processId}`);
+                    const sData = await sRes.json();
+                    
+                    let currentLogs = [];
+                    if (sData && !sData.is_finished) {
+                        currentLogs = sData.logs || [];
+                        setLogs(currentLogs);
+                        setCurrentRunningTaskId(sData.current_task_id);
+                        setIsFinished(sData.is_finished);
+                    } else {
+                        // New Session (or restart if finished)
+                        await fetch(`${API_BASE}/sessions`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ process_id: processId, current_task_id: null, logs: [], is_finished: false })
+                        });
+                        setLogs([]);
+                        setCurrentRunningTaskId(null);
+                        setIsFinished(false);
+                    }
+
+                    // 3. Init BPMN (Read-Only Mode)
+                    if (viewerRef.current) viewerRef.current.destroy();
+                    
+                    // 3. Init BPMN (Read-Only Mode)
+                    if (viewerRef.current) viewerRef.current.destroy();
+                    const viewer = new BpmnJS({ container: containerRef.current });
+                    viewerRef.current = viewer;
+                    
                     try {
-                        await viewer.importXML(data.xml_content);
+                        await viewer.importXML(pData.xml_content);
                         viewer.get('canvas').zoom('fit-viewport');
-                        
-                        // Restore Session
-                        const sessionRes = await fetch(`${API_BASE}/sessions/${processId}`);
-                        const sessionData = await sessionRes.json();
-                        
-                        if (sessionData) {
-                            setLogs(sessionData.logs);
-                            setIsFinished(sessionData.is_finished);
-                            if (!sessionData.is_finished && sessionData.current_task_id) {
-                                const element = viewer.get('elementRegistry').get(sessionData.current_task_id);
-                                if (element) handleElementClick(element);
-                            } else if (!sessionData.is_finished) {
-                                // Fallback to start
-                                const startEvents = viewer.get('elementRegistry').filter(e => e.type === 'bpmn:StartEvent');
-                                if (startEvents.length > 0) handleElementClick(startEvents[0]);
-                            }
-                        } else {
-                            addLog('系統', '流程已載入，準備開始');
-                            const startEvents = viewer.get('elementRegistry').filter(e => e.type === 'bpmn:StartEvent');
-                            if (startEvents.length > 0) handleElementClick(startEvents[0]);
+                    } catch (err) {
+                        console.error('BPMN Import Error:', err);
+                    }
+                    
+                    // 4. Interaction Logic
+                    const eventBus = viewer.get('eventBus');
+                    const elementRegistry = viewer.get('elementRegistry');
+                    const canvas = viewer.get('canvas');
+
+                    // Disable default interactions
+                    const events = [
+                        'shape.move.start', 
+                        'connection.create.start', 
+                        'element.dblclick', 
+                        'contextPad.open', 
+                        'palette.create',
+                        'shape.resize.start',
+                        'connection.segment.move.start',
+                        'bendlpoints.move.start',
+                        'connection.layout.start',
+                        'element.mousedown' // Careful with this one, might block selection. But we need click.
+                    ];
+                    
+                    // We only want to block mousedown if it leads to a move/edit. 
+                    // Actually, blocking shape.move.start is usually enough for moves.
+                    // Let's stick to the specific start events.
+                    
+                    const blockedEvents = [
+                        'shape.move.start',
+                        'connection.create.start',
+                        'element.dblclick',
+                        'contextPad.open',
+                        'palette.create',
+                        'shape.resize.start',
+                        'connection.segment.move.start',
+                        'bendlpoints.move.start',
+                        'connection.layout.start',
+                        'interactionEvents.create', // Blocks context pad creation
+                        'lasso.start', // Block lasso tool
+                        'global-connect.start',
+                        'space-tool.selection.start'
+                    ];
+
+                    blockedEvents.forEach(e => eventBus.on(e, 10000, () => false));
+
+                    // Hide Palette and Context Pad via CSS
+                    const canvasContainer = containerRef.current;
+                    const style = document.createElement('style');
+                    style.innerHTML = `
+                        .djs-palette, .djs-context-pad { display: none !important; }
+                        .djs-outline { display: none !important; } /* Hide selection outline if desired, or keep it */
+                    `;
+                    canvasContainer.appendChild(style);
+
+                    // 5. Always On PI Display -> Moved to separate useEffect
+                    
+                    // Click Handler
+                    eventBus.on('element.click', (e) => {
+                        const element = e.element;
+                        const type = element.type;
+                        if (type === 'bpmn:Task' || type === 'bpmn:UserTask' || type === 'bpmn:ManualTask' || type === 'bpmn:StartEvent' || type === 'bpmn:EndEvent') {
+                            // Use Refs to get latest state
+                            openTaskWindow(element, logsRef.current, runningTaskRef.current);
                         }
+                    });
+
+                    // Highlight Running Task
+                    if (sData && sData.current_task_id) {
+                        try { 
+                            // Ensure element exists before adding marker
+                            if (elementRegistry.get(sData.current_task_id)) {
+                                canvas.addMarker(sData.current_task_id, 'highlight'); 
+                            }
+                        } catch(e) { console.error('Error highlighting task:', e); }
+                    }
+                    
+                    // Colorize Completed Tasks
+                    if (currentLogs.length > 0) {
+                        const completedNames = currentLogs
+                            .filter(l => l.message.startsWith('任務完成'))
+                            .map(l => l.message.split(': ')[1]);
                         
-                        // Apply Cursor Styles & Hyperlink Markers
-                        const canvas = viewer.get('canvas');
-                        const elementRegistry = viewer.get('elementRegistry');
-                        elementRegistry.forEach(element => {
-                            const docs = element.businessObject.documentation;
-                            if (docs && docs.length > 0 && docs[0].text) {
-                                try {
-                                    const data = JSON.parse(docs[0].text);
-                                    if (data.targetUrl) {
-                                        canvas.addMarker(element.id, 'has-hyperlink');
-                                    }
-                                } catch(e) {}
+                        elementRegistry.forEach(el => {
+                            if (completedNames.includes(el.businessObject.name)) {
+                                canvas.addMarker(el.id, 'completed-task');
                             }
                         });
-                        
-                    } catch (err) { console.error(err); }
+                    }
                 };
                 load();
-                return () => {
-                    if (intervalRef.current) clearInterval(intervalRef.current);
-                    viewer.destroy();
+                // Ensure clean load
+                return () => { 
+                    if(viewerRef.current) {
+                        if (viewerRef.current._pollInterval) clearInterval(viewerRef.current._pollInterval);
+                        viewerRef.current.destroy(); 
+                    }
                 };
             }, [processId]);
 
-            const saveSession = async (newLogs, currentTaskId, finished) => {
+            // Apply Text Styles (Operator Mode)
+            useEffect(() => {
+                if (!viewerRef.current) return;
+                
+                const applyStyles = () => {
+                    const elementRegistry = viewerRef.current.get('elementRegistry');
+                    const canvas = viewerRef.current.get('canvas');
+                    
+                    elementRegistry.forEach(element => {
+                        const docs = element.businessObject.documentation;
+                        if (docs && docs.length > 0 && docs[0].text) {
+                            try {
+                                const data = JSON.parse(docs[0].text);
+                                const gfx = canvas.getGraphics(element);
+                                
+                                // 1. Apply TextAnnotation Styles
+                                if (element.type === 'bpmn:TextAnnotation') {
+                                    const text = gfx.querySelector('text');
+                                    if (text) {
+                                        if (data.textFontSize) text.style.fontSize = `${data.textFontSize}px`;
+                                        if (data.textBold) text.style.fontWeight = 'bold';
+                                        else text.style.fontWeight = 'normal';
+                                        if (data.textColor) {
+                                            text.style.fill = data.textColor;
+                                            const path = gfx.querySelector('path');
+                                            if (path) path.style.stroke = data.textColor;
+                                        }
+                                    }
+                                }
+
+                                // 2. Apply Name Font Size (Operator Mode)
+                                if (data.nameFontSize) {
+                                    const label = gfx.querySelector('.djs-label');
+                                    if (label) {
+                                        label.style.fontSize = `${data.nameFontSize}px`;
+                                    }
+                                }
+                            } catch(e) {}
+                        }
+                    });
+                };
+
+                // Apply on load and potentially on updates if we were editing live (which we aren't in Operator)
+                // But we should run it once after import.
+                const eventBus = viewerRef.current.get('eventBus');
+                eventBus.on('import.done', applyStyles);
+                
+                // Also run immediately in case import is already done
+                applyStyles();
+
+                return () => {
+                    eventBus.off('import.done', applyStyles);
+                };
+            }, [process]); // Re-run when process loads
+
+            // Always On PI Display Manager
+            useEffect(() => {
+                const viewer = viewerRef.current;
+                if (!viewer || !process) return;
+
+                const overlays = viewer.get('overlays');
+                const elementRegistry = viewer.get('elementRegistry');
+                const hasStarted = logs.length > 0;
+
+                // 1. Clear overlays if not started
+                if (!hasStarted) {
+                    elementRegistry.forEach(element => {
+                        const businessObj = element.businessObject;
+                        if (businessObj.documentation && businessObj.documentation.length > 0) {
+                            try {
+                                const d = JSON.parse(businessObj.documentation[0].text);
+                                if (d.alwaysOn) {
+                                    overlays.remove({ element: element.id });
+                                }
+                            } catch(e) {}
+                        }
+                    });
+                    return;
+                }
+
+                // 2. Find Always On Elements
+                const alwaysOnElements = [];
+                elementRegistry.forEach(element => {
+                    const businessObj = element.businessObject;
+                    if (businessObj.documentation && businessObj.documentation.length > 0) {
+                        try {
+                            const d = JSON.parse(businessObj.documentation[0].text);
+                            if (d.alwaysOn && d.piTag) {
+                                alwaysOnElements.push({
+                                    id: element.id,
+                                    name: businessObj.name || '未命名任務',
+                                    tag: d.piTag,
+                                    unit: d.piUnit || '',
+                                    precision: d.piPrecision || 2
+                                });
+                            }
+                        } catch(e) {}
+                    }
+                });
+
+                if (alwaysOnElements.length === 0) return;
+
+                // 3. Update Function
+                const updateOverlays = async () => {
+                    for (const el of alwaysOnElements) {
+                        // Fix: Find overlay by checking if it contains our specific content ID
+                        // bpmn-js might not preserve custom 'type' property in the overlay object returned by get()
+                        let overlay = overlays.get({ element: el.id }).find(o => o.html && o.html.querySelector(`#content-${el.id}`));
+                        
+                        // Fetch Data
+                        let data = [];
+                        try {
+                            const res = await fetch(`${API_BASE}/get_tag_value?tag=${encodeURIComponent(el.tag)}`);
+                            data = await res.json();
+                        } catch(e) { console.error(e); }
+
+                        if (!overlay) {
+                            // Create Overlay Container
+                            const container = document.createElement('div');
+                            container.className = 'bg-[#1e1e1e] border border-white/20 rounded shadow-lg text-xs min-w-[150px] flex flex-col resize-x overflow-auto';
+                            container.style.pointerEvents = 'auto'; // Enable interaction
+                            container.style.position = 'absolute'; // For dragging relative to overlay root
+                            
+                            // Header (Drag handle + Toggle)
+                            const header = document.createElement('div');
+                            header.className = 'bg-[#2d2d2d] px-2 py-1 flex justify-between items-center cursor-move select-none border-b border-white/10';
+                            header.innerHTML = `
+                                <span class="text-white/60 font-medium truncate flex-1 min-w-0 mr-2" title="${el.name}">${el.name}</span>
+                                <button class="text-white/40 hover:text-white transition focus:outline-none">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                    </svg>
+                                </button>
+                            `;
+                            
+                            // Content
+                            const content = document.createElement('div');
+                            content.id = `content-${el.id}`;
+                            content.className = 'p-2';
+                            
+                            container.appendChild(header);
+                            container.appendChild(content);
+
+                            // Add to BPMN
+                            const overlayId = overlays.add(el.id, {
+                                type: 'always-on-pi', // Keep passing it, just in case
+                                position: { bottom: 0, right: -10 },
+                                html: container
+                            });
+
+                            // Toggle Logic
+                            const toggleBtn = header.querySelector('button');
+                            let isCollapsed = false;
+                            toggleBtn.onclick = (e) => {
+                                e.stopPropagation(); // Prevent drag
+                                isCollapsed = !isCollapsed;
+                                content.style.display = isCollapsed ? 'none' : 'block';
+                                toggleBtn.innerHTML = isCollapsed ? 
+                                    `<svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" /></svg>` : 
+                                    `<svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>`;
+                            };
+
+                            // Drag Logic
+                            let isDragging = false;
+                            let startX, startY, initialLeft, initialTop;
+
+                            header.onmousedown = (e) => {
+                                e.stopPropagation(); // Prevent BPMN pan
+                                isDragging = true;
+                                startX = e.clientX;
+                                startY = e.clientY;
+                                
+                                const style = window.getComputedStyle(container);
+                                const matrix = new WebKitCSSMatrix(style.transform);
+                                initialLeft = matrix.m41;
+                                initialTop = matrix.m42;
+                                
+                                document.onmousemove = onMouseMove;
+                                document.onmouseup = onMouseUp;
+                            };
+
+                            const onMouseMove = (e) => {
+                                if (!isDragging) return;
+                                const dx = e.clientX - startX;
+                                const dy = e.clientY - startY;
+                                container.style.transform = `translate(${initialLeft + dx}px, ${initialTop + dy}px)`;
+                            };
+
+                            const onMouseUp = () => {
+                                isDragging = false;
+                                document.onmousemove = null;
+                                document.onmouseup = null;
+                            };
+
+                            // Initial Render
+                            renderContent(content, data, el);
+
+                        } else {
+                            // Update Content
+                            const content = overlay.html.querySelector(`#content-${el.id}`);
+                            if (content) {
+                                renderContent(content, data, el);
+                            }
+                        }
+                    }
+                };
+
+                const renderContent = (container, data, el) => {
+                    container.innerHTML = '';
+                    data.forEach(item => {
+                        const row = document.createElement('div');
+                        row.className = 'flex justify-between gap-4 mb-1 last:mb-0';
+                        
+                        const label = document.createElement('span');
+                        label.className = 'text-white/60 flex-1 min-w-0 break-all';
+                        label.innerText = item.tag;
+                        
+                        const val = document.createElement('span');
+                        val.className = 'text-[#81c995] font-mono font-bold';
+                        const numVal = parseFloat(item.value);
+                        val.innerText = !isNaN(numVal) ? numVal.toFixed(el.precision) : item.value;
+                        
+                        row.appendChild(label);
+                        row.appendChild(val);
+                        container.appendChild(row);
+                    });
+
+                    if (el.unit) {
+                        const unitDiv = document.createElement('div');
+                        unitDiv.className = 'text-right text-white/40 text-[10px] mt-1';
+                        unitDiv.innerText = el.unit;
+                        container.appendChild(unitDiv);
+                    }
+                };
+
+                updateOverlays();
+                const interval = setInterval(updateOverlays, 5000);
+                return () => clearInterval(interval);
+
+            }, [processId, logs.length > 0, process]);
+            useEffect(() => {
+                const container = containerRef.current;
+                if (!container) return;
+
+                const onWheel = (e) => {
+                    if (viewerRef.current) {
+                        // Allow Zoom (Ctrl + Wheel)
+                        if (e.ctrlKey || e.metaKey) return;
+
+                        e.preventDefault();
+                        e.stopPropagation();
+                        
+                        const canvas = viewerRef.current.get('canvas');
+                        const viewbox = canvas.viewbox();
+                        
+                        // Move viewbox x by deltaY
+                        canvas.viewbox({
+                            x: viewbox.x + e.deltaY,
+                            y: viewbox.y,
+                            width: viewbox.width,
+                            height: viewbox.height
+                        });
+                    }
+                };
+
+                container.addEventListener('wheel', onWheel, { passive: false, capture: true });
+                return () => container.removeEventListener('wheel', onWheel, { capture: true });
+            }, []);
+
+            // Helper to open window
+            const openTaskWindow = (element, currentLogs, activeTaskId) => {
+                const businessObj = element.businessObject;
+                const docs = businessObj.documentation;
+                let tag = '', unit = '', precision = 2;
+                
+                if (docs && docs.length > 0 && docs[0].text) {
+                    try {
+                        const d = JSON.parse(docs[0].text);
+                        tag = d.piTag;
+                        unit = d.piUnit;
+                        precision = parseInt(d.piPrecision) || 2;
+                    } catch(e) {}
+                }
+
+                // Check status
+                let status = 'idle';
+                if (element.id === activeTaskId) status = 'running';
+                else if (element.type === 'bpmn:StartEvent') {
+                    // Start Event is complete if it has a start log (since we removed the complete log)
+                    if (currentLogs.some(l => l.message.startsWith('任務開始') && l.message.includes(businessObj.name))) status = 'completed';
+                }
+                else if (currentLogs.some(l => l.message.startsWith('任務完成') && l.message.includes(businessObj.name))) status = 'completed';
+
+                // Check predecessors
+                const canStart = checkPredecessors(element, currentLogs);
+
+                setWindowTask({
+                    id: element.id,
+                    name: businessObj.name || '未命名任務',
+                    type: element.type,
+                    tag, unit, precision,
+                    status,
+                    canStart
+                });
+                
+                setNote('');
+                setTagValues([]);
+                setShowWindow(true);
+
+                // Fetch PI Data if tag exists
+                if (tag) {
+                    setLoadingTag(true);
+                    fetch(`${API_BASE}/get_tag_value?tag=${encodeURIComponent(tag)}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            setTagValues(data);
+                            setLoadingTag(false);
+                        });
+                }
+            };
+
+            const handleStartTask = async () => {
+                if (!windowTask) return;
+                
+                // Fetch PI Data for Start Log if tags exist
+                let startValStr = '-';
+                if (windowTask.tag) {
+                    try {
+                        const res = await fetch(`${API_BASE}/get_tag_value?tag=${encodeURIComponent(windowTask.tag)}`);
+                        const data = await res.json();
+                        startValStr = data.map(t => {
+                            const numVal = parseFloat(t.value);
+                            const displayVal = !isNaN(numVal) ? numVal.toFixed(windowTask.precision || 2) : t.value;
+                            return `${t.tag}=${displayVal} ${windowTask.unit || ''}`;
+                        }).join(', ');
+                    } catch(e) { console.error(e); }
+                }
+
+                // Special handling for Start Event: Atomic Start (No Complete Log)
+                if (windowTask.type === 'bpmn:StartEvent') {
+                     const newLogStart = {
+                        time: new Date().toLocaleTimeString(),
+                        source: 'User',
+                        message: `任務開始: ${windowTask.name}`,
+                        value: startValStr,
+                        note: note
+                    };
+                    // Removed newLogEnd to prevent "Task Complete" in Timeline
+                    
+                    const newLogs = [...logs, newLogStart];
+                    setLogs(newLogs);
+                    setCurrentRunningTaskId(null); 
+                    setWindowTask(prev => ({ ...prev, status: 'completed' }));
+                    
+                    // Update Visuals
+                    const canvas = viewerRef.current.get('canvas');
+                    canvas.addMarker(windowTask.id, 'completed-task');
+                    
+                    // Save to Backend
+                    await fetch(`${API_BASE}/sessions`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            process_id: processId,
+                            current_task_id: null,
+                            logs: newLogs,
+                            is_finished: false
+                        })
+                    });
+                    
+                    setShowWindow(false);
+                    return;
+                }
+
+                const newLog = {
+                    time: new Date().toLocaleTimeString(),
+                    source: 'User',
+                    message: `任務開始: ${windowTask.name}`,
+                    value: startValStr,
+                    note: note
+                };
+                const newLogs = [...logs, newLog];
+                setLogs(newLogs);
+                setCurrentRunningTaskId(windowTask.id);
+                setWindowTask(prev => ({ ...prev, status: 'running' }));
+
+                // Update Visuals
+                const canvas = viewerRef.current.get('canvas');
+                canvas.addMarker(windowTask.id, 'highlight');
+
+                // Save to Backend
                 await fetch(`${API_BASE}/sessions`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         process_id: processId,
-                        current_task_id: currentTaskId,
+                        current_task_id: windowTask.id,
                         logs: newLogs,
-                        is_finished: finished
+                        is_finished: false
                     })
                 });
-            };
-
-            const [completedTaskIds, setCompletedTaskIds] = useState(new Set());
-
-            useEffect(() => {
-                const ids = new Set(logs.filter(l => l.taskId).map(l => l.taskId));
-                setCompletedTaskIds(ids);
-            }, [logs]);
-
-            const addLog = (source, message, value = '-', note = '', taskId = null) => {
-                const newLog = { time: new Date().toLocaleTimeString(), source, message, value, note, taskId };
-                setLogs(prev => {
-                    const updatedLogs = [...prev, newLog];
-                    return updatedLogs;
-                });
-                return newLog; // Return for immediate usage
-            };
-
-            const updateOverlay = (elementId, data, precision, unit) => {
-                if (!viewerRef.current) return;
-                const overlays = viewerRef.current.get('overlays');
-                overlays.remove({ element: elementId });
-                if (data && data.length > 0) {
-                    const htmlContent = data.map(d => `<div>${d.tag}: ${formatValue(d.value, precision, unit)}</div>`).join('');
-                    overlays.add(elementId, {
-                        position: { bottom: 10, right: 10 },
-                        html: `<div style="background: #81c995; color: #0f5132; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2); text-align: right; line-height: 1.2;">${htmlContent}</div>`
-                    });
-                }
-            };
-
-            const fetchTagValue = async (tag) => {
-                try {
-                    const res = await fetch(`${API_BASE}/get_tag_value?tag=${encodeURIComponent(tag)}`);
-                    const data = await res.json();
-                    return data;
-                } catch (e) {
-                    console.error(e);
-                    return [];
-                }
-            };
-
-            const formatValue = (val, precision, unit) => {
-                if (val === null || val === undefined || val === 'Error' || val === 'Offline') return val;
-                const num = parseFloat(val);
-                if (isNaN(num)) return val;
-                return `${num.toFixed(precision)}${unit ? ' ' + unit : ''}`;
-            };
-
-            const checkPredecessors = (element) => {
-                if (!element) return false;
-                if (element.type === 'bpmn:StartEvent') return true;
                 
-                const incoming = element.businessObject.incoming;
-                if (!incoming || incoming.length === 0) return true; // Isolated or implicit start
-
-                // Check if at least one incoming flow comes from a completed task
-                return incoming.some(flow => completedTaskIds.has(flow.sourceRef.id));
+                setShowWindow(false); // Close window after start
             };
 
-            const handleElementClick = async (element) => {
-                // Whitelist allowed types for interaction
-                const allowedTypes = [
-                    'bpmn:StartEvent', 'bpmn:EndEvent', 'bpmn:Task', 'bpmn:UserTask', 
-                    'bpmn:ServiceTask', 'bpmn:ManualTask', 'bpmn:ScriptTask', 
-                    'bpmn:BusinessRuleTask', 'bpmn:CallActivity', 'bpmn:SubProcess', 
-                    'bpmn:ExclusiveGateway', 'bpmn:ParallelGateway', 'bpmn:InclusiveGateway', 
-                    'bpmn:ComplexGateway', 'bpmn:EventBasedGateway', 
-                    'bpmn:DataObjectReference', 'bpmn:DataStoreReference'
-                ];
-                
-                if (!allowedTypes.includes(element.type)) return;
+            const handleCompleteTask = async () => {
+                if (!windowTask) return;
 
-                // Clear previous interval
-                if (intervalRef.current) {
-                    clearInterval(intervalRef.current);
-                    intervalRef.current = null;
-                }
-                
-                // Clear previous overlays
-                if (viewerRef.current) {
-                    viewerRef.current.get('overlays').clear();
-                }
+                const valStr = tagValues.map(t => {
+                    const numVal = parseFloat(t.value);
+                    const displayVal = !isNaN(numVal) ? numVal.toFixed(windowTask.precision || 2) : t.value;
+                    return `${t.tag}=${displayVal} ${windowTask.unit || ''}`;
+                }).join(', ') || '-';
 
-                const docs = element.businessObject.documentation;
-                let tag = null;
-                let unit = '';
-                let precision = 2;
-                let targetUrl = '';
-
-                if (docs && docs.length > 0 && docs[0].text) {
-                    try { 
-                        const data = JSON.parse(docs[0].text);
-                        tag = data.piTag;
-                        unit = data.piUnit || '';
-                        precision = data.piPrecision !== undefined ? data.piPrecision : 2;
-                        targetUrl = data.targetUrl || '';
-                    } catch(e) {}
-                }
-                
-                // Handle Hyperlink Click
-                if (targetUrl) {
-                    window.open(targetUrl, '_blank');
-                    // We don't return here because we might still want to show details if it's also a task (unlikely but possible)
-                    // But for Data Objects, usually they are just for reference.
-                }
-
-                setCurrentTask({ id: element.id, name: element.businessObject.name || element.id, tag, unit, precision, elementObj: element });
-                
-                // Highlight Logic
-                if (viewerRef.current) {
-                    const canvas = viewerRef.current.get('canvas');
-                    const registry = viewerRef.current.get('elementRegistry');
-                    // Remove highlight from all elements
-                    registry.forEach(e => canvas.removeMarker(e.id, 'highlight'));
-                    // Add highlight to current
-                    canvas.addMarker(element.id, 'highlight');
-                }
-
-                if (tag) {
-                    setLoadingTag(true);
-                    try {
-                        // Initial Fetch
-                        const data = await fetchTagValue(tag);
-                        setTagValues(data);
-                        
-                        const formattedVal = data.length > 0 ? formatValue(data[0].value, precision, unit) : '-';
-                        const valStr = data.map(d => `${d.tag}=${formatValue(d.value, precision, unit)}`).join(', ');
-                        
-                        // Log Start Value
-                        addLog('PI Server', `開始任務: ${element.businessObject.name || element.id}`, valStr, 'Start Value');
-                        
-                        // Update Overlay
-                        if (data.length > 0) {
-                            updateOverlay(element.id, data, precision, unit);
-                        }
-
-                        // Start Polling (10s)
-                        intervalRef.current = setInterval(async () => {
-                            const polledData = await fetchTagValue(tag);
-                            setTagValues(polledData);
-                            if (polledData.length > 0) {
-                                updateOverlay(element.id, polledData, precision, unit);
-                            }
-                        }, 10000);
-
-                    } catch (e) { 
-                        addLog('Error', '讀取失敗'); 
-                        setTagValues([]); 
-                    } finally { 
-                        setLoadingTag(false); 
-                    }
-                } else { 
-                    setTagValues([]); 
-                }
-            };
-
-            useEffect(() => {
-                if (!viewerRef.current) return;
-                const eventBus = viewerRef.current.get('eventBus');
-                
-                // Lock Diagram: Disable interactions
-                const events = [
-                    'shape.move.start',
-                    'connection.create.start',
-                    'shape.resize.start',
-                    'element.dblclick', // Prevent direct editing
-                    'contextPad.open', 
-                    'palette.create', 
-                    'autoPlace.start'
-                ];
-                const preventDefault = (e) => false;
-                events.forEach(event => eventBus.on(event, 10000, preventDefault));
-
-                const listener = (e) => {
-                    handleElementClick(e.element);
+                const newLog = {
+                    time: new Date().toLocaleTimeString(),
+                    source: 'User',
+                    message: `任務完成: ${windowTask.name}`,
+                    value: valStr,
+                    note: note
                 };
-                eventBus.on('element.click', listener);
+                const newLogs = [...logs, newLog];
+                setLogs(newLogs);
+                setCurrentRunningTaskId(null); 
+                setWindowTask(prev => ({ ...prev, status: 'completed' }));
 
-                // Tooltip for Hyperlinks
-                eventBus.on('element.hover', (e) => {
-                    const docs = e.element.businessObject.documentation;
-                    if (docs && docs.length > 0 && docs[0].text) {
-                        try {
-                            const data = JSON.parse(docs[0].text);
-                            if (data.targetUrl) {
-                                viewerRef.current.get('overlays').add(e.element.id, 'url-tooltip', {
-                                    position: { top: -25, left: 0 },
-                                    html: `<div style="background: rgba(30,30,30,0.9); color: #8ab4f8; padding: 4px 8px; border-radius: 4px; font-size: 11px; border: 1px solid #8ab4f8; pointer-events: none; white-space: nowrap; z-index: 1000;">🔗 ${data.targetUrl}</div>`
-                                });
-                            }
-                        } catch(err) {}
-                    }
+                // Update Visuals
+                const canvas = viewerRef.current.get('canvas');
+                canvas.removeMarker(windowTask.id, 'highlight');
+                canvas.addMarker(windowTask.id, 'completed-task');
+
+                // Save
+                await fetch(`${API_BASE}/sessions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        process_id: processId,
+                        current_task_id: null,
+                        logs: newLogs,
+                        is_finished: false 
+                    })
                 });
-
-                eventBus.on('element.out', (e) => {
-                    viewerRef.current.get('overlays').remove({ type: 'url-tooltip' });
-                });
-
-                // Mouse Wheel Zoom
-                const handleWheel = (e) => {
-                    e.preventDefault();
-                    const canvas = viewerRef.current.get('canvas');
-                    const currentZoom = canvas.zoom();
-                    const factor = e.deltaY > 0 ? 0.995 : 1.005;
-                    
-                    const rect = containerRef.current.getBoundingClientRect();
-                    const x = e.clientX - rect.left;
-                    const y = e.clientY - rect.top;
-                    
-                    canvas.zoom(currentZoom * factor, { x, y });
-                };
                 
-                const container = containerRef.current;
-                container.addEventListener('wheel', handleWheel);
-
-                return () => {
-                    eventBus.off('element.click', listener);
-                    events.forEach(event => eventBus.off(event, preventDefault));
-                    container.removeEventListener('wheel', handleWheel);
-                };
-            }, [viewerRef.current, completedTaskIds]); // Depend on completedTaskIds for validation updates? No, handleElementClick uses state.
-
-            const handleRestart = async () => {
-                if(!confirm('確定要重新開始流程嗎？所有紀錄將被清除。')) return;
-                
-                if (intervalRef.current) clearInterval(intervalRef.current);
-                if (viewerRef.current) viewerRef.current.get('overlays').clear();
-
-                setLogs([]);
-                setCompletedTaskIds(new Set());
-                setIsFinished(false);
-                setNote('');
-                
-                // Reset to Start Event
-                if (viewerRef.current) {
-                    const startEvents = viewerRef.current.get('elementRegistry').filter(e => e.type === 'bpmn:StartEvent');
-                    if (startEvents.length > 0) {
-                        handleElementClick(startEvents[0]);
-                        saveSession([], startEvents[0].id, false);
-                    } else {
-                        setCurrentTask(null);
-                        saveSession([], null, false);
-                    }
-                }
-                addLog('系統', '流程已重置');
+                setShowWindow(false);
             };
 
-            const handleAbort = async () => {
-                const reason = prompt('請輸入中止原因：');
-                if (reason === null) return; // Cancelled
+            const handleFinishProcess = async () => {
+                if (!confirm('確定要結束整個流程嗎？')) return;
                 
-                if (intervalRef.current) clearInterval(intervalRef.current);
-                
-                const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `流程中止: ${reason}`, value: '-', note };
-                const updatedLogs = [...logs, newLog];
-                setLogs(updatedLogs);
-                setNote('');
-                
-                // Find End Event to move token there
-                let endEventId = null;
-                if (viewerRef.current) {
-                    const endEvents = viewerRef.current.get('elementRegistry').filter(e => e.type === 'bpmn:EndEvent');
-                    if (endEvents.length > 0) {
-                        endEventId = endEvents[0].id;
-                        // Remove highlight from current
-                        if (currentTask) {
-                            viewerRef.current.get('canvas').removeMarker(currentTask.id, 'highlight');
-                            viewerRef.current.get('overlays').clear();
-                        }
-                    }
-                }
-                
+                const newLog = {
+                    time: new Date().toLocaleTimeString(),
+                    source: 'System',
+                    message: '流程結束',
+                    value: '-',
+                    note: ''
+                };
+                const newLogs = [...logs, newLog];
+                setLogs(newLogs);
                 setIsFinished(true);
-                setCurrentTask(null);
-                saveSession(updatedLogs, endEventId, true);
-                alert('流程已中止');
+
+                await fetch(`${API_BASE}/sessions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        process_id: processId,
+                        current_task_id: null,
+                        logs: newLogs,
+                        is_finished: true
+                    })
+                });
+                alert('流程已完成！');
+                setShowWindow(false); // Close the window
+                // Stay on page
             };
 
-            const handleComplete = async () => {
-                if (!currentTask) return;
+            const handleExportCSV = () => {
+                // CSV Header
+                let csvContent = "data:text/csv;charset=utf-8,\uFEFFTime,Source,Message,Value,Note\\n";
                 
-                // Log End Value if tag exists
-                let finalValStr = '-';
-                if (currentTask.tag) {
-                    const data = await fetchTagValue(currentTask.tag);
-                    finalValStr = data.map(d => `${d.tag}=${formatValue(d.value, currentTask.precision, currentTask.unit)}`).join(', ');
-                }
+                logs.forEach(log => {
+                    const row = [
+                        log.time,
+                        log.source,
+                        log.message,
+                        `"${log.value}"`, // Quote value to handle commas
+                        `"${log.note}"`
+                    ].join(",");
+                    csvContent += row + "\\n";
+                });
 
-                const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `完成任務: ${currentTask.name}`, value: finalValStr, note: note || 'End Value', taskId: currentTask.id };
-                const updatedLogs = [...logs, newLog];
-                setLogs(updatedLogs);
-                setNote('');
-                
-                // Clear Interval & Overlays
-                if (intervalRef.current) clearInterval(intervalRef.current);
-                if (viewerRef.current) viewerRef.current.get('overlays').clear();
-
-                const element = currentTask.elementObj;
-                let nextTaskId = null;
-                let finished = false;
-
-                // Check if this is a Final End Event being completed manually
-                if (element.type === 'bpmn:EndEvent') {
-                    let isFinal = false;
-                    const docs = element.businessObject.documentation;
-                    if (docs && docs.length > 0 && docs[0].text) {
-                        try { isFinal = JSON.parse(docs[0].text).isFinalEnd; } catch(err) {}
-                    }
-                    
-                    if (isFinal) {
-                        finished = true;
-                        alert('流程已完成！');
-                        setCurrentTask(null);
-                        viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
-                    } else {
-                        alert('此分支已結束。');
-                        setCurrentTask(null);
-                        viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
-                    }
-                } else if (element && element.businessObject.outgoing && element.businessObject.outgoing.length > 0) {
-                    const nextFlow = element.businessObject.outgoing[0];
-                    const targetNode = nextFlow.targetRef;
-                    if (viewerRef.current) {
-                        const targetElement = viewerRef.current.get('elementRegistry').get(targetNode.id);
-                        if (targetElement) {
-                            handleElementClick(targetElement);
-                            nextTaskId = targetElement.id;
-                        }
-                    }
-                } else { 
-                    alert('無後續任務'); 
-                    setCurrentTask(null);
-                    if(viewerRef.current) viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
-                }
-                
-                saveSession(updatedLogs, nextTaskId, finished);
-                if (finished) setIsFinished(true);
-            };
-
-            const handleSkip = async () => {
-                if (!currentTask) return;
-                
-                // Log End Value (Skipped)
-                let finalValStr = '-';
-                if (currentTask.tag) {
-                    const data = await fetchTagValue(currentTask.tag);
-                    finalValStr = data.map(d => `${d.tag}=${formatValue(d.value, currentTask.precision, currentTask.unit)}`).join(', ');
-                }
-
-                const newLog = { time: new Date().toLocaleTimeString(), source: 'User', message: `跳過任務: ${currentTask.name}`, value: finalValStr, note: note || 'Skipped (End Value)' };
-                const updatedLogs = [...logs, newLog];
-                setLogs(updatedLogs);
-                setNote('');
-                
-                if (intervalRef.current) clearInterval(intervalRef.current);
-                if (viewerRef.current) viewerRef.current.get('overlays').clear();
-                
-                // Logic same as complete for moving forward
-                const element = currentTask.elementObj;
-                let nextTaskId = null;
-                let finished = false;
-                
-                if (element && element.businessObject.outgoing && element.businessObject.outgoing.length > 0) {
-                    const nextFlow = element.businessObject.outgoing[0];
-                    const targetNode = nextFlow.targetRef;
-                    if (viewerRef.current) {
-                        const targetElement = viewerRef.current.get('elementRegistry').get(targetNode.id);
-                        if (targetElement) {
-                             if (targetElement.type === 'bpmn:EndEvent') {
-                                finished = true;
-                                alert('流程已完成！');
-                                setCurrentTask(null);
-                                viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
-                            } else {
-                                handleElementClick(targetElement);
-                                nextTaskId = targetElement.id;
-                            }
-                        }
-                    }
-                } else {
-                    finished = true;
-                    setCurrentTask(null);
-                    if(viewerRef.current) viewerRef.current.get('canvas').removeMarker(element.id, 'highlight');
-                }
-                setIsFinished(finished);
-                saveSession(updatedLogs, nextTaskId, finished);
-            };
-
-            const exportCSV = () => {
-                const headers = ['Time', 'Source', 'Message', 'Value', 'Note'];
-                const csvContent = [headers.join(','), ...logs.map(l => `${l.time},${l.source},${l.message},"${l.value}","${l.note || ''}"`)].join('\\n');
-                const blob = new Blob(["\\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
-                const link = document.createElement('a');
-                link.href = URL.createObjectURL(blob);
-                link.setAttribute('download', `${processName}_log.csv`);
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", `${process.name}_logs.csv`);
                 document.body.appendChild(link);
                 link.click();
+                document.body.removeChild(link);
             };
 
+            const headerActions = (
+                <div className="flex gap-2">
+                    {!isFinished ? (
+                        <button 
+                            onClick={handleFinishProcess}
+                            className="bg-[#f28b82] hover:bg-[#f6aea9] text-[#5c1e1e] px-3 py-1 rounded text-xs font-bold transition"
+                        >
+                            結束流程
+                        </button>
+                    ) : (
+                        <>
+                            <button 
+                                onClick={handleExportCSV}
+                                className="bg-[#81c995] hover:bg-[#a8dab5] text-[#0f5132] px-3 py-1 rounded text-xs font-bold transition"
+                            >
+                                匯出 CSV
+                            </button>
+                            <button 
+                                onClick={() => onNavigate('dashboard')}
+                                className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 px-3 py-1 rounded text-xs font-medium transition"
+                            >
+                                返回首頁
+                            </button>
+                        </>
+                    )}
+                </div>
+            );
+
             return (
-                <div className="flex h-full flex-col bg-[#121212]">
-                    <div className="bg-[#1e1e1e] px-6 py-3 flex justify-between items-center border-b border-white/5">
-                        <div className="flex items-center gap-4">
-                            <button onClick={() => onNavigate('dashboard')} className="text-white/60 hover:text-white transition flex items-center gap-1">
-                                <span className="text-lg">←</span> 暫存並返回
-                            </button>
-                            <h2 className="text-xl font-medium text-white/90">{processName} <span className="text-white/40 text-sm ml-2">(執行模式)</span></h2>
-                        </div>
-                        <div className="flex gap-3">
-                            {!isFinished && (
-                                <button onClick={handleAbort} className="px-4 py-2 rounded-full font-medium transition bg-[#f28b82] text-[#002d6f] hover:bg-[#f28b82]/90">
-                                    中止流程
-                                </button>
-                            )}
-                            <button onClick={handleRestart} className="px-4 py-2 rounded-full font-medium transition bg-[#f28b82]/10 text-[#f28b82] hover:bg-[#f28b82]/20 border border-[#f28b82]/20">
-                                重新開始
-                            </button>
-                            <button onClick={exportCSV} disabled={!isFinished} className={`px-6 py-2 rounded-full font-medium transition ${isFinished ? 'bg-[#81c995] text-[#0f5132] hover:bg-[#a8dab5]' : 'bg-[#2d2d2d] text-white/30 cursor-not-allowed'}`}>
-                                {isFinished ? '匯出 CSV' : '未完成不可匯出'}
-                            </button>
-                        </div>
+                <div className="flex flex-col h-full relative">
+                    {/* Top: Timeline (1/4) */}
+                    <div className="h-1/4 min-h-[180px] flex flex-col bg-[#1e1e1e]">
+                        <TimelineViewer logs={logs} headerActions={headerActions} />
                     </div>
-                    <div className="flex-1 flex overflow-hidden">
-                        <div className="flex-1 bg-white relative operator-mode" ref={containerRef}></div>
-                        <div className="w-96 bg-[#1e1e1e] border-l border-white/5 flex flex-col shadow-xl z-10">
-                            <div className="p-4 border-b border-white/5">
-                                <h3 className="font-medium text-white/90 mb-2 text-lg">當前任務</h3>
-                                {currentTask ? (
-                                    <div className="animate-fade-in">
-                                        <div className="text-xl font-bold text-[#8ab4f8] mb-3">{currentTask.name}</div>
-                                        
-                                        {loadingTag ? <div className="text-white/60 animate-pulse">讀取數據中...</div> : (
-                                            <div className={`grid gap-2 ${tagValues.length >= 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                                                {tagValues.map((tv, idx) => (
-                                                    <div key={idx} className="bg-[#2d2d2d] p-3 rounded-xl border border-white/5">
-                                                        <div className="text-[10px] text-white/60 mb-0.5 truncate" title={tv.tag}>{tv.tag}</div>
-                                                        <div className="text-lg font-mono text-[#81c995] truncate">
-                                                            {formatValue(tv.value, currentTask.precision, currentTask.unit)}
-                                                        </div>
-                                                        <div className="text-[10px] text-white/40 mt-0.5 flex justify-between">
-                                                            <span>{tv.timestamp.split('T')[1].split('.')[0]}</span>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                        <div className="mt-3">
-                                            <label className="block text-[10px] font-medium text-[#8ab4f8] mb-1 uppercase tracking-wider">備註 (Note)</label>
-                                            <textarea 
-                                                value={note} 
-                                                onChange={(e) => setNote(e.target.value)} 
-                                                className="w-full bg-[#2d2d2d] border border-white/10 rounded-xl p-2 text-white focus:border-[#8ab4f8] outline-none h-20 text-sm resize-none"
-                                                placeholder="輸入備註..."
-                                            />
-                                        </div>
-                                        <div className="mt-6 flex gap-3">
-                                            <button 
-                                                onClick={handleComplete} 
-                                                disabled={!checkPredecessors(currentTask.elementObj)}
-                                                className={`flex-1 py-3 rounded-full font-medium transition ${checkPredecessors(currentTask.elementObj) ? 'bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f]' : 'bg-[#2d2d2d] text-white/30 cursor-not-allowed'}`}
-                                            >
-                                                {checkPredecessors(currentTask.elementObj) ? '完成任務' : '請先完成前置任務'}
-                                            </button>
-                                            <button onClick={handleSkip} className="flex-1 bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 py-3 rounded-full font-medium transition">跳過</button>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="text-center mt-10">
-                                        {isFinished ? 
-                                            <div className="text-[#81c995] font-bold text-xl flex flex-col items-center gap-2">
-                                                <span className="text-4xl">🎉</span>
-                                                <span>流程已完成</span>
-                                            </div> : 
-                                            <p className="text-white/40">點擊流程圖中的任務以開始操作</p>
-                                        }
-                                    </div>
-                                )}
-                            </div>
-                            <div className="flex-1 overflow-y-auto p-6 font-mono text-sm bg-[#121212]">
-                                <h4 className="text-[#8ab4f8] text-xs font-bold uppercase tracking-wider mb-4 sticky top-0 bg-[#121212] py-2">執行紀錄</h4>
-                                {logs.map((l, i) => (
-                                    <div key={i} className="mb-4 border-l-2 border-[#2d2d2d] pl-4 relative">
-                                        <div className="absolute -left-[5px] top-1 w-2 h-2 rounded-full bg-[#2d2d2d]"></div>
-                                        <div className="flex justify-between items-baseline mb-1">
-                                            <span className="text-white/40 text-xs">{l.time}</span>
-                                            <span className="text-[#8ab4f8] text-xs font-bold">{l.source}</span>
-                                        </div>
-                                        <div className="text-white/80 mb-1">{l.message}</div>
-                                        {l.value !== '-' && <div className="text-[#81c995] text-xs bg-[#81c995]/10 inline-block px-2 py-0.5 rounded">Value: {l.value}</div>}
-                                        {l.note && <div className="text-[#fdd663] text-xs mt-2 bg-[#fdd663]/10 p-2 rounded border border-[#fdd663]/20">Note: {l.note}</div>}
-                                    </div>
-                                ))}
-                            </div>
+
+                    {/* Bottom: BPMN (3/4) */}
+                    <div className="flex-1 relative bg-white border-t-4 border-[#1e1e1e]">
+                        <div ref={containerRef} className="w-full h-full operator-mode"></div>
+                        
+                        {/* Zoom Controls */}
+                        <div className="absolute bottom-4 right-4 flex flex-col gap-2 z-10">
+                            <button onClick={() => handleZoom(0.2)} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] font-bold text-xl">+</button>
+                            <button onClick={() => handleZoom(-0.2)} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] font-bold text-xl">-</button>
+                            <button onClick={() => viewerRef.current.get('canvas').zoom('fit-viewport')} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] text-xs">Fit</button>
                         </div>
+
+                        {/* Floating Window */}
+                        {showWindow && (
+                            <FloatingTaskWindow 
+                                task={windowTask} 
+                                onStart={handleStartTask}
+                                onEnd={handleCompleteTask}
+                                onFinish={handleFinishProcess}
+                                onClose={() => setShowWindow(false)}
+                                note={note}
+                                setNote={setNote}
+                                tagValues={tagValues}
+                                loadingTag={loadingTag}
+                            />
+                        )}
                     </div>
                 </div>
             );
@@ -1681,6 +2201,46 @@ HTML_TEMPLATE = """
                         eventBus.on('element.out', (e) => {
                             viewer.get('overlays').remove({ type: 'url-tooltip' });
                         });
+
+                        // Apply Text Styles (Review Mode)
+                        const applyStyles = () => {
+                            const elementRegistry = viewer.get('elementRegistry');
+                            const canvas = viewer.get('canvas');
+                            
+                            elementRegistry.forEach(element => {
+                                const docs = element.businessObject.documentation;
+                                if (docs && docs.length > 0 && docs[0].text) {
+                                    try {
+                                        const data = JSON.parse(docs[0].text);
+                                        const gfx = canvas.getGraphics(element);
+                                        
+                                        // 1. Apply TextAnnotation Styles
+                                        if (element.type === 'bpmn:TextAnnotation') {
+                                            const text = gfx.querySelector('text');
+                                            if (text) {
+                                                if (data.textFontSize) text.style.fontSize = `${data.textFontSize}px`;
+                                                if (data.textBold) text.style.fontWeight = 'bold';
+                                                else text.style.fontWeight = 'normal';
+                                                if (data.textColor) {
+                                                    text.style.fill = data.textColor;
+                                                    const path = gfx.querySelector('path');
+                                                    if (path) path.style.stroke = data.textColor;
+                                                }
+                                            }
+                                        }
+
+                                        // 2. Apply Name Font Size (Review Mode)
+                                        if (data.nameFontSize) {
+                                            const label = gfx.querySelector('.djs-label');
+                                            if (label) {
+                                                label.style.fontSize = `${data.nameFontSize}px`;
+                                            }
+                                        }
+                                    } catch(e) {}
+                                }
+                            });
+                        };
+                        applyStyles();
                         
                     } catch(err) {
                         console.error(err);
@@ -1688,6 +2248,7 @@ HTML_TEMPLATE = """
                     }
                 };
                 load();
+                // Ensure clean load
                 return () => viewer.destroy();
             }, [processId]);
 
@@ -1941,6 +2502,28 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
+# 2. Add IIS Middleware (Handle sub-path issue)
+class IISMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    def __call__(self, environ, start_response):
+        # Set your IIS Application Alias
+        script_name = '/DigitalSOP' 
+        
+        # Force SCRIPT_NAME so url_for generates correct paths
+        environ['SCRIPT_NAME'] = script_name
+        
+        # Check if PATH_INFO contains the prefix and strip it if needed
+        path = environ.get('PATH_INFO', '')
+        if path.startswith(script_name):
+            environ['PATH_INFO'] = path[len(script_name):]
+            
+        return self.app(environ, start_response)
+
+# Apply Middleware
+app.wsgi_app = IISMiddleware(app.wsgi_app)
 
 if __name__ == '__main__':
     # Initialize Database
