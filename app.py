@@ -589,15 +589,33 @@ HTML_TEMPLATE = """
         // --- New Components ---
 
         // Timeline Viewer
-        const TimelineViewer = ({ logs, headerActions }) => {
+        const TimelineViewer = ({ logs, headerActions, onEditLog }) => {
             const scrollRef = useRef(null);
-            const [tooltip, setTooltip] = useState(null); // { x, y, content, type }
+            const [tooltip, setTooltip] = useState(null); // { x, y, content, type, index }
+            const hideTimeoutRef = useRef(null);
             
             useEffect(() => {
                 if (scrollRef.current) {
                     scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
                 }
             }, [logs]);
+
+            const showTooltip = (rect, content, type, index) => {
+                if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
+                setTooltip({
+                    x: rect.left + rect.width / 2,
+                    y: rect.bottom + 8,
+                    content,
+                    type,
+                    index
+                });
+            };
+
+            const hideTooltip = () => {
+                hideTimeoutRef.current = setTimeout(() => {
+                    setTooltip(null);
+                }, 200); // Delay to allow moving to tooltip
+            };
 
             return (
                 <div className="h-full w-full bg-[#1e1e1e] border-b border-white/10 flex flex-col relative">
@@ -655,16 +673,8 @@ HTML_TEMPLATE = """
                                         {log.note && (
                                             <div 
                                                 className="text-[10px] text-[#8ab4f8] bg-[#8ab4f8]/10 px-2 py-1 rounded border border-[#8ab4f8]/20 whitespace-nowrap cursor-help hover:bg-[#8ab4f8]/20 transition animate-pulse"
-                                                onMouseEnter={(e) => {
-                                                    const rect = e.currentTarget.getBoundingClientRect();
-                                                    setTooltip({
-                                                        x: rect.left + rect.width / 2,
-                                                        y: rect.bottom + 8,
-                                                        content: log.note,
-                                                        type: 'note'
-                                                    });
-                                                }}
-                                                onMouseLeave={() => setTooltip(null)}
+                                                onMouseEnter={(e) => showTooltip(e.currentTarget.getBoundingClientRect(), log.note, 'note', idx)}
+                                                onMouseLeave={hideTooltip}
                                             >
                                                 備註
                                             </div>
@@ -674,16 +684,8 @@ HTML_TEMPLATE = """
                                         {log.value && log.value !== '-' && log.value !== '"-"' && (
                                             <div 
                                                 className="text-[10px] text-[#fdd663] bg-[#fdd663]/10 px-2 py-1 rounded border border-[#fdd663]/20 whitespace-nowrap cursor-help hover:bg-[#fdd663]/20 transition"
-                                                onMouseEnter={(e) => {
-                                                    const rect = e.currentTarget.getBoundingClientRect();
-                                                    setTooltip({
-                                                        x: rect.left + rect.width / 2,
-                                                        y: rect.bottom + 8,
-                                                        content: log.value,
-                                                        type: 'data'
-                                                    });
-                                                }}
-                                                onMouseLeave={() => setTooltip(null)}
+                                                onMouseEnter={(e) => showTooltip(e.currentTarget.getBoundingClientRect(), log.value, 'data', idx)}
+                                                onMouseLeave={hideTooltip}
                                             >
                                                 數據
                                             </div>
@@ -697,28 +699,38 @@ HTML_TEMPLATE = """
                     {/* Fixed Tooltip Overlay */}
                     {tooltip && (
                         <div 
-                            className="fixed z-[9999] bg-[#2d2d2d] border border-white/20 rounded-lg p-2 shadow-xl min-w-[150px] max-w-[200px] pointer-events-none"
-                            style={ { 
-                                left: tooltip.x, 
+                            className="fixed z-[9999] bg-[#2d2d2d] border border-white/10 rounded-lg shadow-xl p-3 text-xs text-white/90 max-w-xs break-words pointer-events-auto"
+                            style={ {
                                 top: tooltip.y,
+                                left: tooltip.x,
                                 transform: 'translateX(-50%)'
                             } }
+                            onMouseEnter={() => { if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current); }}
+                            onMouseLeave={hideTooltip}
                         >
-                            {/* Arrow */}
-                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-[#2d2d2d]"></div>
+                            <div className="mb-1 font-bold text-white/50 uppercase tracking-wider text-[10px]">
+                                {tooltip.type === 'note' ? '備註內容' : '數據詳情'}
+                            </div>
+                            <div className="whitespace-pre-wrap">
+                                {tooltip.content.split(', ').map((line, i) => (
+                                    <div key={i}>{line}</div>
+                                ))}
+                            </div>
                             
-                            {tooltip.type === 'note' ? (
-                                <div className="text-xs text-white/90 whitespace-pre-wrap break-words">
-                                    {tooltip.content}
-                                </div>
-                            ) : (
-                                <div>
-                                    {tooltip.content.split(', ').map((v, i) => (
-                                        <div key={i} className="text-xs text-[#fdd663] whitespace-nowrap mb-1 last:mb-0 font-mono">
-                                            {v}
-                                        </div>
-                                    ))}
-                                </div>
+                            {/* Edit Button for Note */}
+                            {tooltip.type === 'note' && onEditLog && (
+                                <button 
+                                    onClick={() => {
+                                        const newNote = prompt('編輯備註', tooltip.content);
+                                        if (newNote !== null) {
+                                            onEditLog(tooltip.index, newNote);
+                                            setTooltip(prev => ({ ...prev, content: newNote }));
+                                        }
+                                    }}
+                                    className="mt-2 w-full bg-[#8ab4f8]/10 hover:bg-[#8ab4f8]/20 text-[#8ab4f8] py-1 rounded text-[10px] transition flex items-center justify-center gap-1"
+                                >
+                                    <span>✎</span> 編輯備註
+                                </button>
                             )}
                         </div>
                     )}
@@ -1048,6 +1060,13 @@ HTML_TEMPLATE = """
                 modelerRef.current = modeler;
                 makePaletteDraggable(containerRef.current);
 
+                // Prevent Direct Editing/Double Click for Sticky Notes (Groups) to avoid crash
+                modeler.on('element.dblclick', 2000, (e) => {
+                    if (e.element.type === 'bpmn:Group') {
+                        return false; // Stop propagation and prevent default (Direct Editing)
+                    }
+                });
+
                 const loadDiagram = async () => {
                     let xml = '';
                     if (processId) {
@@ -1283,8 +1302,17 @@ HTML_TEMPLATE = """
                         if (modified) alert('已移除其他 End Event 的最終標記，以此元件為主');
                     }
 
+                    // Clean up Sticky Note properties for non-Group elements
+                    const finalData = { ...newData };
+                    if (selectedElement.type !== 'bpmn:Group') {
+                        delete finalData.noteColor;
+                        delete finalData.borderColor;
+                        delete finalData.noteOpacity;
+                        delete finalData.htmlContent;
+                    }
+
                     const newDoc = bpmnFactory.create('bpmn:Documentation', { 
-                        text: JSON.stringify(newData) 
+                        text: JSON.stringify(finalData) 
                     });
                     modeling.updateProperties(selectedElement, { documentation: [newDoc] });
                     
@@ -1593,7 +1621,7 @@ HTML_TEMPLATE = """
                                                     ))}
                                                     <input 
                                                         type="color" 
-                                                        value={noteColor} 
+                                                        value={noteColor === 'transparent' ? '#ffffff' : noteColor} 
                                                         onChange={(e) => updateElementProperties({ noteColor: e.target.value })}
                                                         className="w-6 h-6 p-0 border-0 rounded overflow-hidden"
                                                     />
@@ -1812,7 +1840,7 @@ HTML_TEMPLATE = """
                                         </div>
                                     )}
 
-                                    {(selectedElement.type === 'bpmn:DataObjectReference' || selectedElement.type === 'bpmn:DataStoreReference') && (
+                                    {(selectedElement.type === 'bpmn:DataObjectReference' || selectedElement.type === 'bpmn:DataStoreReference' || selectedElement.type === 'bpmn:TextAnnotation') && (
                                         <div className="mb-5">
                                             <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">超連結 (Hyperlink)</label>
                                             <input 
@@ -1947,68 +1975,8 @@ HTML_TEMPLATE = """
                                     const data = JSON.parse(docs[0].text);
                                     const gfx = canvas.getGraphics(element);
                                     
-                                    // 1. Apply Sticky Note Styles (Legacy: bpmn:TextAnnotation)
-                                    if (element.type === 'bpmn:TextAnnotation') {
-                                        const text = gfx.querySelector('text');
-                                        const path = gfx.querySelector('path');
-                                        
-                                        // Reset Visibility First
-                                        if (text) text.style.display = 'block';
-                                        if (path) path.style.display = 'block';
-                                        
-                                        // Remove old sticky elements
-                                        const oldBg = gfx.querySelector('.sticky-bg');
-                                        if (oldBg) oldBg.remove();
-                                        const oldFo = gfx.querySelector('.sticky-fo');
-                                        if (oldFo) oldFo.remove();
-
-                                        // Always use Rich Text / Sticky Note Rendering
-                                        // Hide default elements
-                                        if (text) text.style.display = 'none';
-                                        if (path) path.style.display = 'none';
-
-                                        // 1. Background Rect
-                                        const width = element.width || 100;
-                                        const height = element.height || 100;
-                                        
-                                        const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-                                        bgRect.classList.add('sticky-bg');
-                                        bgRect.setAttribute('width', width);
-                                        bgRect.setAttribute('height', height);
-                                        bgRect.setAttribute('fill', data.noteColor || 'transparent');
-                                        bgRect.setAttribute('stroke', data.borderColor || 'transparent');
-                                        bgRect.setAttribute('fill-opacity', data.noteOpacity !== undefined ? data.noteOpacity : 1);
-                                        bgRect.setAttribute('stroke-width', '1');
-                                        gfx.prepend(bgRect);
-
-                                        // 2. ForeignObject for Rich Text
-                                        const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
-                                        fo.classList.add('sticky-fo');
-                                        fo.setAttribute('width', width);
-                                        fo.setAttribute('height', height);
-                                        fo.setAttribute('x', 0);
-                                        fo.setAttribute('y', 0);
-                                        
-                                        // Content Div
-                                        const div = document.createElement('div');
-                                        div.style.width = '100%';
-                                        div.style.height = '100%';
-                                        div.style.padding = '10px';
-                                        div.style.boxSizing = 'border-box';
-                                        div.style.overflow = 'hidden';
-                                        div.style.fontSize = `${data.textFontSize || 12}px`;
-                                        div.style.fontWeight = data.textBold ? 'bold' : 'normal';
-                                        div.style.color = data.textColor || '#000000';
-                                        div.style.fontFamily = 'Arial, sans-serif';
-                                        div.style.whiteSpace = 'pre-wrap';
-                                        div.style.wordBreak = 'break-word';
-                                        
-                                        // Use stored HTML content or fallback to plain text
-                                        div.innerHTML = data.htmlContent || (docs[0].text ? JSON.parse(docs[0].text).text : '') || '';
-                                        
-                                        fo.appendChild(div);
-                                        gfx.appendChild(fo);
-                                    }
+                                    // 1. Apply Sticky Note Styles (Legacy: bpmn:TextAnnotation removed to match Editor)
+                                    // if (element.type === 'bpmn:TextAnnotation') { ... }
 
                                     // 1. Apply Sticky Note Styles (New: bpmn:Group)
                                     if (element.type === 'bpmn:Group') {
@@ -2147,6 +2115,24 @@ HTML_TEMPLATE = """
                     eventBus.on('element.click', (e) => {
                         const element = e.element;
                         const type = element.type;
+                        
+                        // Check for Hyperlink first
+                        const docs = element.businessObject.documentation;
+                        if (docs && docs.length > 0 && docs[0].text) {
+                            try {
+                                const data = JSON.parse(docs[0].text);
+                                if (data.targetUrl && data.targetUrl.trim() !== '') {
+                                    // Ensure protocol exists
+                                    let url = data.targetUrl.trim();
+                                    if (!/^https?:\/\//i.test(url)) {
+                                        url = 'http://' + url;
+                                    }
+                                    window.open(url, '_blank');
+                                    return; // Stop if it's a link
+                                }
+                            } catch(e) {}
+                        }
+
                         if (type === 'bpmn:Task' || type === 'bpmn:UserTask' || type === 'bpmn:ManualTask' || type === 'bpmn:StartEvent' || type === 'bpmn:EndEvent') {
                             // Use Refs to get latest state
                             openTaskWindow(element, logsRef.current, runningTaskRef.current);
@@ -2609,9 +2595,26 @@ HTML_TEMPLATE = """
                 // Stay on page
             };
 
+            const handleEditLog = async (index, newNote) => {
+                const newLogs = [...logs];
+                newLogs[index].note = newNote;
+                setLogs(newLogs);
+
+                await fetch(`${API_BASE}/sessions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        process_id: processId,
+                        current_task_id: currentRunningTaskId,
+                        logs: newLogs,
+                        is_finished: isFinished
+                    })
+                });
+            };
+
             const handleExportCSV = () => {
                 // CSV Header
-                let csvContent = "data:text/csv;charset=utf-8,\uFEFFTime,Source,Message,Value,Note\\n";
+                let csvContent = "data:text/csv;charset=utf-8,\\uFEFFTime,Source,Message,Value,Note\\n";
                 
                 logs.forEach(log => {
                     const row = [
@@ -2665,7 +2668,7 @@ HTML_TEMPLATE = """
                 <div className="flex flex-col h-full relative">
                     {/* Top: Timeline (1/4) */}
                     <div className="h-1/4 min-h-[180px] flex flex-col bg-[#1e1e1e]">
-                        <TimelineViewer logs={logs} headerActions={headerActions} />
+                        <TimelineViewer logs={logs} headerActions={headerActions} onEditLog={handleEditLog} />
                     </div>
 
                     {/* Bottom: BPMN (3/4) */}
@@ -2938,6 +2941,52 @@ HTML_TEMPLATE = """
                 return result;
             };
 
+            // Apply colors when csvData changes
+            useEffect(() => {
+                if (!viewerRef.current || csvData.length === 0) return;
+                
+                const canvas = viewerRef.current.get('canvas');
+                const elementRegistry = viewerRef.current.get('elementRegistry');
+                
+                // Clear existing markers
+                elementRegistry.forEach(e => {
+                    canvas.removeMarker(e.id, 'completed-task');
+                    canvas.removeMarker(e.id, 'highlight');
+                });
+
+                // Track status of each task
+                const taskStatus = {}; // { taskName: 'completed' | 'running' }
+
+                csvData.forEach(row => {
+                    let taskName = row.message;
+                    if (taskName.includes(': ')) {
+                        taskName = taskName.split(': ')[1].trim();
+                    }
+
+                    if (row.message.startsWith('任務完成')) {
+                        taskStatus[taskName] = 'completed';
+                    } else if (row.message.startsWith('任務開始')) {
+                        // If not already completed, mark as running
+                        if (taskStatus[taskName] !== 'completed') {
+                            taskStatus[taskName] = 'running';
+                        }
+                    }
+                });
+
+                // Apply markers
+                Object.entries(taskStatus).forEach(([name, status]) => {
+                    const element = elementRegistry.filter(e => e.businessObject.name === name)[0];
+                    if (element) {
+                        if (status === 'completed') {
+                            canvas.addMarker(element.id, 'completed-task');
+                        } else if (status === 'running') {
+                            canvas.addMarker(element.id, 'highlight');
+                        }
+                    }
+                });
+
+            }, [csvData]);
+
             const handleFileUpload = (e) => {
                 const file = e.target.files[0];
                 const reader = new FileReader();
@@ -2975,7 +3024,6 @@ HTML_TEMPLATE = """
                 elementRegistry.forEach(e => canvas.removeMarker(e.id, 'highlight'));
 
                 // Extract Task Name from Message
-                // Patterns: "開始任務: Name", "完成任務: Name", "跳過任務: Name"
                 let taskName = row.message;
                 if (taskName.includes(': ')) {
                     taskName = taskName.split(': ')[1].trim();
@@ -2990,103 +3038,58 @@ HTML_TEMPLATE = """
                     
                     // Show Overlay if Value exists and is not '-'
                     if (row.value && row.value !== '-' && row.value !== '"-"') {
-                        // Value format: "Tag1=10.00 Unit, Tag2=20.00 Unit"
-                        // Split by comma but respect if there are other commas (though formatValue doesn't produce commas inside value usually)
-                        // The formatValue output is: `${d.tag}=${val}` joined by ', '
-                        // We can split by ', ' safely enough for now
                         const parts = row.value.split(', ');
                         const htmlContent = parts.map(p => `<div>${p}</div>`).join('');
                         
                         overlays.add(element.id, {
-                            position: { bottom: 10, right: 10 },
-                            html: `<div style="background: #81c995; color: #0f5132; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2); text-align: right; line-height: 1.2;">${htmlContent}</div>`
+                            position: { top: -40, left: 0 },
+                            html: `<div style="background: rgba(45,45,45,0.9); color: #fdd663; padding: 6px 10px; border-radius: 6px; font-size: 12px; border: 1px solid #fdd663; pointer-events: none; white-space: nowrap; z-index: 1000; font-family: monospace;">${htmlContent}</div>`
                         });
-                        
-                        // Center view
-                        // canvas.scrollToElement(element); // Optional: might be too jumpy
                     }
                 }
             };
 
-            // Keyboard Navigation
-            useEffect(() => {
-                const handleKeyDown = (e) => {
-                    if (csvData.length === 0) return;
-                    
-                    if (e.key === 'ArrowDown') {
-                        e.preventDefault();
-                        setSelectedLogIndex(prev => {
-                            const next = prev === null ? 0 : Math.min(prev + 1, csvData.length - 1);
-                            handleLogClick(csvData[next], next);
-                            return next;
-                        });
-                    } else if (e.key === 'ArrowUp') {
-                        e.preventDefault();
-                        setSelectedLogIndex(prev => {
-                            const next = prev === null ? 0 : Math.max(prev - 1, 0);
-                            handleLogClick(csvData[next], next);
-                            return next;
-                        });
-                    }
-                };
-                
-                window.addEventListener('keydown', handleKeyDown);
-                return () => window.removeEventListener('keydown', handleKeyDown);
-            }, [csvData]); // Re-bind when data changes
+            const headerActions = (
+                <div className="flex gap-2">
+                    <label className="bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#174ea6] px-3 py-1 rounded text-xs font-bold transition cursor-pointer">
+                        匯入 CSV
+                        <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
+                    </label>
+                    <button 
+                        onClick={() => onNavigate('dashboard')}
+                        className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 px-3 py-1 rounded text-xs font-medium transition"
+                    >
+                        返回首頁
+                    </button>
+                </div>
+            );
 
             return (
-                <div className="flex h-full flex-col bg-[#121212]">
-                    <div className="bg-[#1e1e1e] px-6 py-3 flex justify-between items-center border-b border-white/5">
-                        <div className="flex items-center gap-4">
-                            <button onClick={() => onNavigate('dashboard')} className="text-white/60 hover:text-white transition flex items-center gap-1">
-                                <span className="text-lg">←</span> 返回
-                            </button>
-                            <h2 className="text-xl font-medium text-white/90">{processName} <span className="text-white/40 text-sm ml-2">(歷史回顧)</span></h2>
-                        </div>
-                        <div className="flex gap-4">
-                            <label className="cursor-pointer bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-4 py-2 rounded-full font-medium transition shadow-sm">
-                                匯入 Log (CSV)
-                                <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
-                            </label>
-                        </div>
+                <div className="flex flex-col h-full relative">
+                    {/* Top: Timeline (1/4) */}
+                    <div className="h-1/4 min-h-[180px] flex flex-col bg-[#1e1e1e]">
+                        <TimelineViewer logs={csvData} headerActions={headerActions} />
                     </div>
-                    <div className="flex-1 flex overflow-hidden">
-                        <div className="flex-1 bg-white relative review-mode" ref={containerRef}>
-                            {!processId && <div className="absolute inset-0 flex items-center justify-center text-slate-400">錯誤：未指定流程 ID</div>}
+
+                    {/* Bottom: BPMN (3/4) */}
+                    <div className="flex-1 relative bg-white border-t-4 border-[#1e1e1e]">
+                        <div ref={containerRef} className="w-full h-full review-mode"></div>
+                        
+                        {/* Zoom Controls */}
+                        <div className="absolute bottom-4 right-4 flex flex-col gap-2 z-10">
+                            <button onClick={() => viewerRef.current.get('canvas').zoom(viewerRef.current.get('canvas').zoom() + 0.2)} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] font-bold text-xl">+</button>
+                            <button onClick={() => viewerRef.current.get('canvas').zoom(viewerRef.current.get('canvas').zoom() - 0.2)} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] font-bold text-xl">-</button>
+                            <button onClick={() => viewerRef.current.get('canvas').zoom('fit-viewport')} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] text-xs">Fit</button>
                         </div>
-                        <div className="w-96 bg-[#1e1e1e] border-l border-white/5 overflow-y-auto p-6">
-                            <h3 className="font-medium text-white/90 mb-4 text-lg">操作紀錄</h3>
-                            {csvData.length === 0 ? <p className="text-white/40 text-center py-10">請上傳 CSV 檔案以檢視紀錄</p> : (
-                                <div className="space-y-3">
-                                    {csvData.map((row, i) => (
-                                        <div 
-                                            key={i} 
-                                            onClick={() => handleLogClick(row, i)}
-                                            className={`text-sm p-3 rounded-xl border transition cursor-pointer group ${selectedLogIndex === i ? 'bg-[#2d2d2d] border-[#8ab4f8] ring-1 ring-[#8ab4f8]' : 'bg-[#2d2d2d] border-white/5 hover:border-white/20'}`}
-                                        >
-                                            <div className="flex justify-between items-center mb-1">
-                                                <span className="text-white/40 text-xs">{row.time}</span>
-                                                <span className="text-[#8ab4f8] text-xs font-bold">{row.source}</span>
-                                            </div>
-                                            <div className="text-white/80 group-hover:text-white">{row.message}</div>
-                                            
-                                            {/* Value Display: Hide if '-' */}
-                                            {row.value && row.value !== '-' && row.value !== '"-"' && (
-                                                <div className="mt-2 text-[#81c995] text-xs bg-[#81c995]/10 inline-block px-2 py-1 rounded w-full">
-                                                    {row.value.split(', ').map((v, idx) => (
-                                                        <div key={idx}>{v}</div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                            
-                                            {row.note && row.note !== '""' && !(row.note === 'End Value' && (row.value === '-' || row.value === '"-"')) && (
-                                                <div className="text-[#fdd663] text-xs mt-2 bg-[#fdd663]/10 p-2 rounded border border-[#fdd663]/20">Note: {row.note}</div>
-                                            )}
-                                        </div>
-                                    ))}
+
+                        {csvData.length === 0 && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-20 pointer-events-none">
+                                <div className="bg-[#2d2d2d] p-6 rounded-lg shadow-xl text-center">
+                                    <p className="text-white/80 mb-2">請匯入 CSV 檔案以開始回顧</p>
+                                    <p className="text-white/40 text-xs">點擊上方 "匯入 CSV" 按鈕</p>
                                 </div>
-                            )}
-                        </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             );
