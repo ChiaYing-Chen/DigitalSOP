@@ -1067,9 +1067,57 @@ HTML_TEMPLATE = """
                 // Do NOT navigate back
             };
 
+            const autoResizeElement = (element, text, fontSize, modeling) => {
+                if (!text || !modeling) return;
+                
+                // 1. Measure Text
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+                const metrics = ctx.measureText(text);
+                const textWidth = metrics.width;
+                
+                let newWidth = element.width;
+                let newHeight = element.height;
+                let shouldResize = false;
+
+                // 2. Task Resizing (Expand Width)
+                if (element.type.includes('Task')) {
+                    // Add padding
+                    const requiredWidth = textWidth + 40;
+                    if (requiredWidth > element.width) {
+                        newWidth = requiredWidth;
+                        shouldResize = true;
+                    }
+                }
+                
+                // 3. Pool/Lane Resizing (Expand Height for Vertical Text)
+                else if (element.type === 'bpmn:Participant' || element.type === 'bpmn:Lane') {
+                    // Text is vertical, so Text Width -> Element Height
+                    const requiredHeight = textWidth + 60;
+                    if (requiredHeight > element.height) {
+                        newHeight = requiredHeight;
+                        shouldResize = true;
+                    }
+                }
+
+                if (shouldResize) {
+                    modeling.resizeShape(element, {
+                        x: element.x,
+                        y: element.y,
+                        width: newWidth,
+                        height: newHeight
+                    });
+                }
+            };
+
             const updateElementName = (val) => {
                 setElementName(val);
-                if (selectedElement && modelerRef.current) { modelerRef.current.get('modeling').updateLabel(selectedElement, val); }
+                if (selectedElement && modelerRef.current) { 
+                    const modeling = modelerRef.current.get('modeling');
+                    modeling.updateLabel(selectedElement, val); 
+                    autoResizeElement(selectedElement, val, nameFontSize, modeling);
+                }
             };
 
             const updateElementProperties = (tag, unit, precision, url, finalEnd, alwaysOnVal, tSize, tBold, tColor, tBg, nSize) => {
@@ -1137,6 +1185,9 @@ HTML_TEMPLATE = """
                         }) 
                     });
                     modeling.updateProperties(selectedElement, { documentation: [newDoc] });
+                    
+                    // Trigger Auto Resize
+                    autoResizeElement(selectedElement, elementName, currentNameFontSize, modeling);
                 }
             };
 
@@ -1199,7 +1250,6 @@ HTML_TEMPLATE = """
 
                                 // 2. Apply Name Font Size (For all elements)
                                 if (data.nameFontSize) {
-                                    // Try to find the label text. In bpmn-js, it's often in a class .djs-label
                                     const label = gfx.querySelector('.djs-label');
                                     if (label) {
                                         label.style.fontSize = `${data.nameFontSize}px`;
@@ -1540,7 +1590,7 @@ HTML_TEMPLATE = """
                     const style = document.createElement('style');
                     style.innerHTML = `
                         .djs-palette, .djs-context-pad { display: none !important; }
-                        .djs-outline { display: none !important; } /* Hide selection outline if desired, or keep it */
+                        .djs-outline { display: none !important; }
                     `;
                     canvasContainer.appendChild(style);
 
