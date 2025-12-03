@@ -526,36 +526,64 @@ HTML_TEMPLATE = """
                 const palette = container.querySelector('.djs-palette');
                 if (palette) {
                     clearInterval(checkExist);
+                    
+                    // Set Initial Position (Right Side)
+                    palette.style.left = 'auto';
+                    palette.style.right = '20px';
+                    palette.style.top = '20px';
+                    
                     if (!palette.querySelector('.palette-handle')) {
                         const handle = document.createElement('div');
                         handle.className = 'palette-handle';
+                        // Simple 6-dots grip icon
+                        handle.innerHTML = `
+                            <svg width="16" height="4" viewBox="0 0 16 4" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <circle cx="2" cy="2" r="1.5" fill="#94a3b8"/>
+                                <circle cx="8" cy="2" r="1.5" fill="#94a3b8"/>
+                                <circle cx="14" cy="2" r="1.5" fill="#94a3b8"/>
+                            </svg>
+                        `;
+                        handle.style.display = 'flex';
+                        handle.style.justifyContent = 'center';
+                        handle.style.alignItems = 'center';
+                        handle.style.padding = '4px 0';
+                        handle.style.cursor = 'move';
+                        handle.style.background = '#f1f5f9'; // Light gray background matching palette
+                        handle.style.borderBottom = '1px solid #e2e8f0';
+                        handle.style.borderRadius = '4px 4px 0 0';
+                        
                         palette.prepend(handle);
+                        
                         let isDragging = false;
                         let startX, startY, initialLeft, initialTop;
+                        
                         handle.addEventListener('mousedown', (e) => {
                             isDragging = true;
                             startX = e.clientX;
                             startY = e.clientY;
                             const rect = palette.getBoundingClientRect();
-                            initialLeft = rect.left;
-                            initialTop = rect.top;
+                            const containerRect = container.getBoundingClientRect();
+                            initialLeft = rect.left - containerRect.left;
+                            initialTop = rect.top - containerRect.top;
                             e.preventDefault();
                         });
+                        
                         const onMouseMove = (e) => {
                             if (!isDragging) return;
                             const dx = e.clientX - startX;
                             const dy = e.clientY - startY;
                             palette.style.left = `${initialLeft + dx}px`;
                             palette.style.top = `${initialTop + dy}px`;
-                            palette.style.right = 'auto';
+                            palette.style.right = 'auto'; // Clear right when dragging
                             palette.style.bottom = 'auto';
                         };
+                        
                         const onMouseUp = () => { isDragging = false; };
                         document.addEventListener('mousemove', onMouseMove);
                         document.addEventListener('mouseup', onMouseUp);
                     }
                 }
-            }, 500);
+            }, 100);
         };
 
         // --- New Components ---
@@ -563,6 +591,7 @@ HTML_TEMPLATE = """
         // Timeline Viewer
         const TimelineViewer = ({ logs, headerActions }) => {
             const scrollRef = useRef(null);
+            const [tooltip, setTooltip] = useState(null); // { x, y, content, type }
             
             useEffect(() => {
                 if (scrollRef.current) {
@@ -571,7 +600,7 @@ HTML_TEMPLATE = """
             }, [logs]);
 
             return (
-                <div className="h-full w-full bg-[#1e1e1e] border-b border-white/10 flex flex-col">
+                <div className="h-full w-full bg-[#1e1e1e] border-b border-white/10 flex flex-col relative">
                     <div className="px-6 py-2 border-b border-white/5 flex justify-between items-center bg-[#252525]">
                         <div className="flex items-center gap-4">
                             <h3 className="text-sm font-medium text-white/70 uppercase tracking-wider mr-4">操作紀錄 Timeline</h3>
@@ -588,6 +617,7 @@ HTML_TEMPLATE = """
                     <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden flex items-start px-6 gap-8 scrollbar-thin pt-4 pb-8" onWheel={(e) => {
                         if (scrollRef.current) {
                             scrollRef.current.scrollLeft += e.deltaY;
+                            setTooltip(null); // Hide tooltip on scroll
                         }
                     }}>
                         {logs.length === 0 && (
@@ -619,28 +649,79 @@ HTML_TEMPLATE = """
                                         {log.message.includes(': ') ? log.message.split(': ')[1] : log.message}
                                     </div>
 
-                                    {/* PI Tag Values (Tooltip) */}
-                                    {log.value && log.value !== '-' && log.value !== '"-"' && (
-                                        <div className="relative group/tooltip mt-1">
-                                            <div className="text-[10px] text-[#fdd663] bg-[#fdd663]/10 px-2 py-1 rounded border border-[#fdd663]/20 whitespace-nowrap cursor-help">
-                                                {log.value.split(', ').length} 筆數據
+                                    {/* Note and Data Buttons */}
+                                    <div className="flex gap-2 mt-1">
+                                        {/* Note Button */}
+                                        {log.note && (
+                                            <div 
+                                                className="text-[10px] text-[#8ab4f8] bg-[#8ab4f8]/10 px-2 py-1 rounded border border-[#8ab4f8]/20 whitespace-nowrap cursor-help hover:bg-[#8ab4f8]/20 transition animate-pulse"
+                                                onMouseEnter={(e) => {
+                                                    const rect = e.currentTarget.getBoundingClientRect();
+                                                    setTooltip({
+                                                        x: rect.left + rect.width / 2,
+                                                        y: rect.bottom + 8,
+                                                        content: log.note,
+                                                        type: 'note'
+                                                    });
+                                                }}
+                                                onMouseLeave={() => setTooltip(null)}
+                                            >
+                                                備註
                                             </div>
-                                            {/* Tooltip */}
-                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/tooltip:block bg-[#2d2d2d] border border-white/20 rounded-lg p-2 shadow-xl z-50 min-w-[150px]">
-                                                {log.value.split(', ').map((v, i) => (
-                                                    <div key={i} className="text-xs text-[#fdd663] whitespace-nowrap mb-1 last:mb-0 font-mono">
-                                                        {v}
-                                                    </div>
-                                                ))}
-                                                {/* Arrow */}
-                                                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[#2d2d2d]"></div>
+                                        )}
+
+                                        {/* Data Button */}
+                                        {log.value && log.value !== '-' && log.value !== '"-"' && (
+                                            <div 
+                                                className="text-[10px] text-[#fdd663] bg-[#fdd663]/10 px-2 py-1 rounded border border-[#fdd663]/20 whitespace-nowrap cursor-help hover:bg-[#fdd663]/20 transition"
+                                                onMouseEnter={(e) => {
+                                                    const rect = e.currentTarget.getBoundingClientRect();
+                                                    setTooltip({
+                                                        x: rect.left + rect.width / 2,
+                                                        y: rect.bottom + 8,
+                                                        content: log.value,
+                                                        type: 'data'
+                                                    });
+                                                }}
+                                                onMouseLeave={() => setTooltip(null)}
+                                            >
+                                                數據
                                             </div>
-                                        </div>
-                                    )}
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         ))}
                     </div>
+
+                    {/* Fixed Tooltip Overlay */}
+                    {tooltip && (
+                        <div 
+                            className="fixed z-[9999] bg-[#2d2d2d] border border-white/20 rounded-lg p-2 shadow-xl min-w-[150px] max-w-[200px] pointer-events-none"
+                            style={ { 
+                                left: tooltip.x, 
+                                top: tooltip.y,
+                                transform: 'translateX(-50%)'
+                            } }
+                        >
+                            {/* Arrow */}
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-[#2d2d2d]"></div>
+                            
+                            {tooltip.type === 'note' ? (
+                                <div className="text-xs text-white/90 whitespace-pre-wrap break-words">
+                                    {tooltip.content}
+                                </div>
+                            ) : (
+                                <div>
+                                    {tooltip.content.split(', ').map((v, i) => (
+                                        <div key={i} className="text-xs text-[#fdd663] whitespace-nowrap mb-1 last:mb-0 font-mono">
+                                            {v}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             );
         };
@@ -947,7 +1028,14 @@ HTML_TEMPLATE = """
             const [textBgColor, setTextBgColor] = useState('transparent');
             const [nameFontSize, setNameFontSize] = useState(12); // New State for Name Font Size
 
+            // Sticky Note State
+            const [noteColor, setNoteColor] = useState('#fff2cc'); // Default Post-it Yellow
+            const [borderColor, setBorderColor] = useState('#d6b656');
+            const [noteOpacity, setNoteOpacity] = useState(1);
+            const [htmlContent, setHtmlContent] = useState(''); // Store HTML content for sticky notes
+
             const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+            const [isPanelOpen, setIsPanelOpen] = useState(true);
             const [isFinalEnd, setIsFinalEnd] = useState(false);
 
             const GOOGLE_COLORS = [
@@ -1001,20 +1089,29 @@ HTML_TEMPLATE = """
                                 setTextColor(data.textColor || '#000000');
                                 setTextBgColor(data.textBgColor || 'transparent');
                                 setNameFontSize(data.nameFontSize || 12);
+                                
+                                // Load Sticky Note Styles
+                                setNoteColor(data.noteColor || '#fff2cc');
+                                setBorderColor(data.borderColor || '#d6b656');
+                                setNoteOpacity(data.noteOpacity !== undefined ? data.noteOpacity : 1);
+                                setHtmlContent(data.htmlContent || '');
                             } catch(e) { 
                                 setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl(''); setIsFinalEnd(false); setAlwaysOn(false);
                                 setTextFontSize(12); setTextBold(false); setTextColor('#000000'); setTextBgColor('transparent');
                                 setNameFontSize(12);
+                                setNoteColor('#fff2cc'); setBorderColor('#d6b656'); setNoteOpacity(1); setHtmlContent('');
                             }
                         } else { 
                             setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl(''); setIsFinalEnd(false); setAlwaysOn(false);
                             setTextFontSize(12); setTextBold(false); setTextColor('#000000'); setTextBgColor('transparent');
                             setNameFontSize(12);
+                            setNoteColor('#fff2cc'); setBorderColor('#d6b656'); setNoteOpacity(1); setHtmlContent('');
                         }
                     } else { 
                         setSelectedElement(null); setElementName(''); setPiTag(''); setPiUnit(''); setPiPrecision(2); setTargetUrl(''); setIsFinalEnd(false); setAlwaysOn(false);
                         setTextFontSize(12); setTextBold(false); setTextColor('#000000'); setTextBgColor('transparent');
                         setNameFontSize(12);
+                        setNoteColor('#fff2cc'); setBorderColor('#d6b656'); setNoteOpacity(1); setHtmlContent('');
                     }
                 });
                 
@@ -1025,6 +1122,8 @@ HTML_TEMPLATE = """
                 modeler.on('commandStack.changed', () => {
                     setHasUnsavedChanges(true);
                 });
+
+
 
                 // Mouse Wheel Zoom
                 const handleWheel = (e) => {
@@ -1091,7 +1190,8 @@ HTML_TEMPLATE = """
                     }
                 }
                 
-                // 3. Pool/Lane Resizing (Expand Height for Vertical Text)
+                // 3. Pool/Lane Resizing (Disabled to prevent unwanted resizing)
+                /*
                 else if (element.type === 'bpmn:Participant' || element.type === 'bpmn:Lane') {
                     // Text is vertical, so Text Width -> Element Height
                     const requiredHeight = textWidth + 60;
@@ -1100,6 +1200,7 @@ HTML_TEMPLATE = """
                         shouldResize = true;
                     }
                 }
+                */
 
                 if (shouldResize) {
                     modeling.resizeShape(element, {
@@ -1120,26 +1221,40 @@ HTML_TEMPLATE = """
                 }
             };
 
-            const updateElementProperties = (tag, unit, precision, url, finalEnd, alwaysOnVal, tSize, tBold, tColor, tBg, nSize) => {
-                setPiTag(tag);
-                setPiUnit(unit);
-                setPiPrecision(precision);
-                setTargetUrl(url);
-                setIsFinalEnd(finalEnd);
-                setAlwaysOn(alwaysOnVal);
-                
-                // Text Styles State
-                setTextFontSize(tSize !== undefined ? tSize : textFontSize);
-                setTextBold(tBold !== undefined ? tBold : textBold);
-                setTextColor(tColor !== undefined ? tColor : textColor);
-                setTextBgColor(tBg !== undefined ? tBg : textBgColor);
-                setNameFontSize(nSize !== undefined ? nSize : nameFontSize);
-                
-                const currentFontSize = tSize !== undefined ? tSize : textFontSize;
-                const currentBold = tBold !== undefined ? tBold : textBold;
-                const currentColor = tColor !== undefined ? tColor : textColor;
-                const currentBg = tBg !== undefined ? tBg : textBgColor;
-                const currentNameFontSize = nSize !== undefined ? nSize : nameFontSize;
+            const updateElementProperties = (updates) => {
+                const newData = {
+                    piTag: updates.piTag !== undefined ? updates.piTag : piTag,
+                    piUnit: updates.piUnit !== undefined ? updates.piUnit : piUnit,
+                    piPrecision: updates.piPrecision !== undefined ? updates.piPrecision : piPrecision,
+                    targetUrl: updates.targetUrl !== undefined ? updates.targetUrl : targetUrl,
+                    isFinalEnd: updates.isFinalEnd !== undefined ? updates.isFinalEnd : isFinalEnd,
+                    alwaysOn: updates.alwaysOn !== undefined ? updates.alwaysOn : alwaysOn,
+                    textFontSize: updates.textFontSize !== undefined ? updates.textFontSize : textFontSize,
+                    textBold: updates.textBold !== undefined ? updates.textBold : textBold,
+                    textColor: updates.textColor !== undefined ? updates.textColor : textColor,
+                    textBgColor: updates.textBgColor !== undefined ? updates.textBgColor : textBgColor,
+                    nameFontSize: updates.nameFontSize !== undefined ? updates.nameFontSize : nameFontSize,
+                    noteColor: updates.noteColor !== undefined ? updates.noteColor : noteColor,
+                    borderColor: updates.borderColor !== undefined ? updates.borderColor : borderColor,
+                    noteOpacity: updates.noteOpacity !== undefined ? updates.noteOpacity : noteOpacity,
+                    htmlContent: updates.htmlContent !== undefined ? updates.htmlContent : htmlContent,
+                };
+
+                setPiTag(newData.piTag);
+                setPiUnit(newData.piUnit);
+                setPiPrecision(newData.piPrecision);
+                setTargetUrl(newData.targetUrl);
+                setIsFinalEnd(newData.isFinalEnd);
+                setAlwaysOn(newData.alwaysOn);
+                setTextFontSize(newData.textFontSize);
+                setTextBold(newData.textBold);
+                setTextColor(newData.textColor);
+                setTextBgColor(newData.textBgColor);
+                setNameFontSize(newData.nameFontSize);
+                setNoteColor(newData.noteColor);
+                setBorderColor(newData.borderColor);
+                setNoteOpacity(newData.noteOpacity);
+                setHtmlContent(newData.htmlContent);
 
                 if (selectedElement && modelerRef.current) {
                     const modeling = modelerRef.current.get('modeling');
@@ -1147,7 +1262,7 @@ HTML_TEMPLATE = """
                     const elementRegistry = modelerRef.current.get('elementRegistry');
 
                     // If setting as Final End, uncheck others
-                    if (finalEnd && selectedElement.type === 'bpmn:EndEvent') {
+                    if (newData.isFinalEnd && selectedElement.type === 'bpmn:EndEvent') {
                         const endEvents = elementRegistry.filter(e => e.type === 'bpmn:EndEvent' && e.id !== selectedElement.id);
                         let modified = false;
                         endEvents.forEach(e => {
@@ -1169,25 +1284,12 @@ HTML_TEMPLATE = """
                     }
 
                     const newDoc = bpmnFactory.create('bpmn:Documentation', { 
-                        text: JSON.stringify({ 
-                            piTag: tag, 
-                            piUnit: unit, 
-                            piPrecision: parseInt(precision), 
-                            targetUrl: url, 
-                            isFinalEnd: finalEnd, 
-                            alwaysOn: alwaysOnVal,
-                            // Save Text Styles
-                            textFontSize: currentFontSize,
-                            textBold: currentBold,
-                            textColor: currentColor,
-                            textBgColor: currentBg,
-                            nameFontSize: currentNameFontSize
-                        }) 
+                        text: JSON.stringify(newData) 
                     });
                     modeling.updateProperties(selectedElement, { documentation: [newDoc] });
                     
                     // Trigger Auto Resize
-                    autoResizeElement(selectedElement, elementName, currentNameFontSize, modeling);
+                    autoResizeElement(selectedElement, elementName, newData.nameFontSize, modeling);
                 }
             };
 
@@ -1233,18 +1335,72 @@ HTML_TEMPLATE = """
                                 const data = JSON.parse(docs[0].text);
                                 const gfx = canvas.getGraphics(element);
                                 
-                                // 1. Apply TextAnnotation Styles
-                                if (element.type === 'bpmn:TextAnnotation') {
+                                // 1. Apply Sticky Note Styles (Now using bpmn:Group)
+                                if (element.type === 'bpmn:Group') {
                                     const text = gfx.querySelector('text');
-                                    if (text) {
-                                        if (data.textFontSize) text.style.fontSize = `${data.textFontSize}px`;
-                                        if (data.textBold) text.style.fontWeight = 'bold';
-                                        else text.style.fontWeight = 'normal';
-                                        if (data.textColor) {
-                                            text.style.fill = data.textColor;
-                                            const path = gfx.querySelector('path');
-                                            if (path) path.style.stroke = data.textColor;
-                                        }
+                                    const path = gfx.querySelector('path');
+                                    const rect = gfx.querySelector('rect'); // Groups usually have a rect or path
+                                    
+                                    // Reset Visibility First (Default State)
+                                    if (text) text.style.display = 'block';
+                                    if (path) path.style.display = 'block';
+                                    if (rect) rect.style.display = 'block';
+                                    
+                                    // Remove old sticky elements if any
+                                    const oldBg = gfx.querySelector('.sticky-bg');
+                                    if (oldBg) oldBg.remove();
+                                    const oldFo = gfx.querySelector('.sticky-fo');
+                                    if (oldFo) oldFo.remove();
+
+                                    // Always use Rich Text / Sticky Note Rendering for Groups created as Sticky Notes
+                                    // Check if it has sticky note data
+                                    if (data.noteColor || data.htmlContent) {
+                                        // Hide default elements
+                                        if (text) text.style.display = 'none';
+                                        if (path) path.style.display = 'none';
+                                        if (rect) rect.style.display = 'none';
+
+                                        // 1. Background Rect
+                                        const width = element.width || 300;
+                                        const height = element.height || 300;
+                                        
+                                        const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                                        bgRect.classList.add('sticky-bg');
+                                        bgRect.setAttribute('width', width);
+                                        bgRect.setAttribute('height', height);
+                                        bgRect.setAttribute('fill', data.noteColor || 'transparent');
+                                        bgRect.setAttribute('stroke', data.borderColor || 'transparent');
+                                        bgRect.setAttribute('fill-opacity', data.noteOpacity !== undefined ? data.noteOpacity : 1);
+                                        bgRect.setAttribute('stroke-width', '1');
+                                        gfx.prepend(bgRect);
+
+                                        // 2. ForeignObject for Rich Text
+                                        const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
+                                        fo.classList.add('sticky-fo');
+                                        fo.setAttribute('width', width);
+                                        fo.setAttribute('height', height);
+                                        fo.setAttribute('x', 0);
+                                        fo.setAttribute('y', 0);
+                                        
+                                        // Content Div
+                                        const div = document.createElement('div');
+                                        div.style.width = '100%';
+                                        div.style.height = '100%';
+                                        div.style.padding = '10px';
+                                        div.style.boxSizing = 'border-box';
+                                        div.style.overflow = 'hidden';
+                                        div.style.fontSize = `${data.textFontSize || 12}px`;
+                                        div.style.fontWeight = data.textBold ? 'bold' : 'normal';
+                                        div.style.color = data.textColor || '#000000';
+                                        div.style.fontFamily = 'Arial, sans-serif';
+                                        div.style.whiteSpace = 'pre-wrap'; // Preserve whitespace
+                                        div.style.wordBreak = 'break-word';
+                                        
+                                        // Use stored HTML content or fallback to plain text
+                                        div.innerHTML = data.htmlContent || (docs[0].text ? JSON.parse(docs[0].text).text : '') || '';
+                                        
+                                        fo.appendChild(div);
+                                        gfx.appendChild(fo);
                                     }
                                 }
 
@@ -1270,6 +1426,96 @@ HTML_TEMPLATE = """
                 };
             }, [modelerRef.current]); // Re-bind if modeler changes
 
+            // Sync Sticky Note Content to ContentEditable Div
+            useEffect(() => {
+                if (selectedElement && selectedElement.type === 'bpmn:Group') {
+                    const div = document.getElementById('sticky-editor-div');
+                    if (div) {
+                        const docs = selectedElement.businessObject.documentation;
+                        let content = '';
+                        if (docs && docs.length > 0 && docs[0].text) {
+                            try {
+                                const data = JSON.parse(docs[0].text);
+                                content = data.htmlContent || '';
+                            } catch(e) {}
+                        }
+                        if (div.innerHTML !== content) {
+                            div.innerHTML = content;
+                        }
+                    }
+                }
+            }, [selectedElement]);
+
+            // Inject Custom Palette Entries
+            useEffect(() => {
+                const interval = setInterval(() => {
+                    // Use containerRef to scope the search
+                    const container = containerRef.current;
+                    if (modelerRef.current && container) {
+                        const palette = container.querySelector('.djs-palette .djs-palette-entries');
+                        if (palette) {
+                            clearInterval(interval);
+                            
+                            // Check if already exists
+                            if (palette.querySelector('.custom-sticky-note-tool')) return;
+
+                            // Create Entry Container (Group)
+                            const group = document.createElement('div');
+                            group.className = 'group';
+                            
+                            // Create Entry
+                            const entry = document.createElement('div');
+                            entry.className = 'entry custom-sticky-note-tool';
+                            entry.title = '新增便利貼 (Sticky Note)';
+                            // Use standard palette entry styles + custom override
+                            entry.style.cssText = 'cursor: pointer; font-weight: bold; font-family: serif; font-size: 20px; text-align: center; line-height: 1.5; color: #000; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center;';
+                            entry.innerHTML = 'T';
+                            
+                            entry.addEventListener('click', (event) => {
+                                const elementFactory = modelerRef.current.get('elementFactory');
+                                const create = modelerRef.current.get('create');
+                                const bpmnFactory = modelerRef.current.get('bpmnFactory');
+                                
+                                const shape = elementFactory.createShape({ type: 'bpmn:Group' });
+                                
+                                const newDoc = bpmnFactory.create('bpmn:Documentation', { 
+                                    text: JSON.stringify({ 
+                                        noteColor: '#fff2cc',
+                                        borderColor: '#d6b656',
+                                        text: 'New Note',
+                                        htmlContent: 'New Note'
+                                    }) 
+                                });
+                                shape.businessObject.documentation = [newDoc];
+                                shape.width = 200;
+                                shape.height = 200;
+
+                                create.start(event, shape);
+                            });
+                            
+                            // Hover effect
+                            entry.addEventListener('mouseenter', () => { entry.style.backgroundColor = '#eee'; });
+                            entry.addEventListener('mouseleave', () => { entry.style.backgroundColor = 'transparent'; });
+
+                            group.appendChild(entry);
+                            palette.appendChild(group);
+                        }
+                    }
+                }, 100); // Check every 100ms
+                return () => clearInterval(interval);
+            }, []);
+
+            // Remove the CSS injection block
+            useEffect(() => {
+                // Clean up any previous style injections if they exist
+                const styles = document.head.querySelectorAll('style');
+                styles.forEach(s => {
+                    if (s.innerHTML.includes('.djs-palette')) {
+                        document.head.removeChild(s);
+                    }
+                });
+            }, []);
+
             return (
                 <div className="flex h-full flex-col bg-[#121212]">
                     <div className="bg-[#1e1e1e] px-6 py-3 flex justify-between items-center border-b border-white/5">
@@ -1282,87 +1528,229 @@ HTML_TEMPLATE = """
                         </div>
                         <div className="flex gap-3">
                             <button onClick={() => window.open('http://10.122.51.60/MDserve/article/DigitalSOP/BPMN.md', '_blank')} className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 w-10 h-10 rounded-full font-bold transition flex items-center justify-center" title="BPMN 說明">?</button>
-                            <button onClick={handleSave} className="bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-6 py-2 rounded-full font-medium shadow-sm transition">儲存流程</button>
+                            <button onClick={handleSave} className="bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-4 py-1.5 text-sm rounded-full font-medium shadow-sm transition">儲存流程</button>
                         </div>
                     </div>
                     <div className="flex-1 flex overflow-hidden relative">
                         <div className="flex-1 relative bg-white" ref={containerRef}></div>
                         
-                        {/* Help Modal */}
+                        {/* Toggle Panel Button */}
+                        <button 
+                            onClick={() => setIsPanelOpen(!isPanelOpen)}
+                            className="absolute right-0 top-1/2 transform -translate-y-1/2 bg-[#1e1e1e] text-white/60 hover:text-white p-2 rounded-l-lg border-l border-t border-b border-white/10 z-10"
+                            style={ { right: isPanelOpen ? '320px' : '0' } }
+                        >
+                            {isPanelOpen ? '→' : '←'}
+                        </button>
 
-
-                        <div className="w-80 bg-[#1e1e1e] border-l border-white/5 p-6 overflow-y-auto">
-                            <h3 className="font-medium text-white/90 mb-6 text-lg">屬性面板</h3>
+                        {/* Property Panel */}
+                        <div 
+                            className={`bg-[#1e1e1e] border-l border-white/5 p-6 overflow-y-auto transition-all duration-300 ${isPanelOpen ? 'w-80' : 'w-0 p-0 overflow-hidden'}`}
+                        >
+                            <h3 className="font-medium text-white/90 mb-6 text-lg whitespace-nowrap">屬性面板</h3>
                             {selectedElement ? (
                                 <div>
-                                    <div className="mb-5">
-                                        <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">名稱 (Name)</label>
-                                        <input value={elementName} onChange={(e) => updateElementName(e.target.value)} className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" placeholder="輸入名稱..." />
-                                        
-                                        {/* Name Font Size Control */}
-                                        <div className="flex items-center justify-between">
-                                            <span className="text-white/60 text-xs">字體大小</span>
-                                            <select 
-                                                value={nameFontSize} 
-                                                onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, isFinalEnd, alwaysOn, textFontSize, textBold, textColor, textBgColor, parseInt(e.target.value))}
-                                                className="bg-[#2d2d2d] text-white border border-white/10 rounded px-2 py-1 text-xs outline-none"
-                                            >
-                                                {[12, 14, 16, 18, 20, 24, 30, 36].map(s => (
-                                                    <option key={s} value={s}>{s}px</option>
-                                                ))}
-                                            </select>
-                                        </div>
-                                    </div>
-
-                                    {/* Text Annotation Styling */}
-                                    {selectedElement.type === 'bpmn:TextAnnotation' && (
-                                        <div className="mb-5 border-t border-white/10 pt-4">
-                                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">文字樣式 (Style)</label>
+                                    {selectedElement.type !== 'bpmn:Group' && (
+                                        <div className="mb-5">
+                                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">名稱 (Name)</label>
+                                            <input value={elementName} onChange={(e) => updateElementName(e.target.value)} className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" placeholder="輸入名稱..." />
                                             
-                                            {/* Font Size */}
-                                            <div className="flex items-center justify-between mb-2">
-                                                <span className="text-white/60 text-sm">字體大小</span>
+                                            {/* Name Font Size Control */}
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-white/60 text-xs">字體大小</span>
                                                 <select 
-                                                    value={textFontSize} 
-                                                    onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, isFinalEnd, alwaysOn, parseInt(e.target.value), textBold, textColor, textBgColor, nameFontSize)}
-                                                    className="bg-[#2d2d2d] text-white border border-white/10 rounded px-2 py-1 text-sm outline-none"
+                                                    value={nameFontSize} 
+                                                    onChange={(e) => updateElementProperties({ nameFontSize: parseInt(e.target.value) })}
+                                                    className="bg-[#2d2d2d] text-white border border-white/10 rounded px-2 py-1 text-xs outline-none"
                                                 >
                                                     {[12, 14, 16, 18, 20, 24, 30, 36].map(s => (
                                                         <option key={s} value={s}>{s}px</option>
                                                     ))}
                                                 </select>
                                             </div>
+                                        </div>
+                                    )}
 
-                                            {/* Bold */}
-                                            <label className="flex items-center gap-2 cursor-pointer bg-[#2d2d2d] p-2 rounded-lg border border-white/10 hover:border-[#8ab4f8] transition mb-2">
-                                                <input 
-                                                    type="checkbox" 
-                                                    checked={textBold} 
-                                                    onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, isFinalEnd, alwaysOn, textFontSize, e.target.checked, textColor, textBgColor, nameFontSize)}
-                                                    className="accent-[#8ab4f8]" 
-                                                />
-                                                <span className="text-white/80 text-sm font-bold">粗體 (Bold)</span>
-                                            </label>
+                                    {/* Text Annotation Styling */}
+                                    {selectedElement.type === 'bpmn:Group' && (
+                                        <div className="mb-5 border-t border-white/10 pt-4">
+                                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">便利貼設定 (Sticky Note)</label>
+                                            
 
-                                            {/* Text Color */}
-                                            <div className="mb-2">
-                                                <span className="text-white/60 text-sm block mb-1">文字顏色</span>
+
+                                            {/* Note Color */}
+                                            <div className="mb-3">
+                                                <span className="text-white/60 text-sm block mb-1">背景顏色</span>
                                                 <div className="flex gap-1 flex-wrap">
-                                                    {['#000000', '#ffffff', '#ff0000', '#00ff00', '#0000ff', '#ffff00', '#8ab4f8', '#f28b82', '#81c995'].map(c => (
+                                                    {['#fff2cc', '#fce5cd', '#e6b8af', '#d9ead3', '#c9daf8', '#d0e0e3', '#ead1dc', '#ffffff', 'transparent'].map(c => (
                                                         <button 
                                                             key={c}
-                                                            onClick={() => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, isFinalEnd, alwaysOn, textFontSize, textBold, c, textBgColor, nameFontSize)}
-                                                            className={`w-5 h-5 rounded-full border ${textColor === c ? 'border-white scale-110' : 'border-white/10'}`}
+                                                            onClick={() => updateElementProperties({ noteColor: c })}
+                                                            className={`w-6 h-6 rounded border ${noteColor === c ? 'border-white scale-110' : 'border-white/10'}`}
                                                             style={ { backgroundColor: c } }
+                                                            title={c}
+                                                        />
+                                                    ))}
+                                                    <input 
+                                                        type="color" 
+                                                        value={noteColor} 
+                                                        onChange={(e) => updateElementProperties({ noteColor: e.target.value })}
+                                                        className="w-6 h-6 p-0 border-0 rounded overflow-hidden"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            {/* Border Color */}
+                                            <div className="mb-3">
+                                                <span className="text-white/60 text-sm block mb-1">邊框顏色</span>
+                                                <div className="flex gap-1 flex-wrap">
+                                                    {['#d6b656', '#e69138', '#cc0000', '#6aa84f', '#3c78d8', '#45818e', '#a64d79', '#000000', 'transparent'].map(c => (
+                                                        <button 
+                                                            key={c}
+                                                            onClick={() => updateElementProperties({ borderColor: c })}
+                                                            className={`w-6 h-6 rounded border ${borderColor === c ? 'border-white scale-110' : 'border-white/10'}`}
+                                                            style={ { backgroundColor: c } }
+                                                            title={c}
                                                         />
                                                     ))}
                                                 </div>
                                             </div>
+
+                                            {/* Opacity */}
+                                            <div className="mb-4">
+                                                <div className="flex justify-between mb-1">
+                                                    <span className="text-white/60 text-sm">透明度</span>
+                                                    <span className="text-white/80 text-xs">{Math.round(noteOpacity * 100)}%</span>
+                                                </div>
+                                                <input 
+                                                    type="range" 
+                                                    min="0" 
+                                                    max="1" 
+                                                    step="0.1" 
+                                                    value={noteOpacity} 
+                                                    onChange={(e) => updateElementProperties({ noteOpacity: parseFloat(e.target.value) })}
+                                                    className="w-full accent-[#8ab4f8] h-1 bg-white/10 rounded-lg appearance-none cursor-pointer"
+                                                />
+                                            </div>
+
+                                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider border-t border-white/10 pt-4">文字樣式 (Style)</label>
+                                            
+                                            {/* Font Size */}
+                                            <div className="flex items-center justify-between mb-2">
+                                                <span className="text-white/60 text-sm">字體大小</span>
+                                                <select 
+                                                    value={textFontSize} 
+                                                    onChange={(e) => updateElementProperties({ textFontSize: parseInt(e.target.value) })}
+                                                    className="bg-[#2d2d2d] text-white border border-white/10 rounded px-2 py-1 text-sm outline-none"
+                                                >
+                                                    {[12, 14, 16, 18, 20, 24, 30, 36, 48, 64].map(s => (
+                                                        <option key={s} value={s}>{s}px</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            {/* Bold - Removed global toggle for Sticky Note */}
+                                            {/* Text Color - Removed global picker for Sticky Note */}
+
+                                            {/* Rich Text Editor */}
+                                            <div className="mt-4 border-t border-white/10 pt-4">
+                                                    <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">內容編輯 (Content)</label>
+                                                    <div className="bg-[#2d2d2d] rounded-lg border border-white/10 p-2">
+                                                        <div className="flex gap-2 mb-2 border-b border-white/10 pb-2 flex-wrap">
+                                                            <button 
+                                                                onMouseDown={(e) => {
+                                                                    e.preventDefault();
+                                                                    document.execCommand('bold', false, null);
+                                                                    const div = document.getElementById('sticky-editor-div');
+                                                                    if (div) {
+                                                                        setHtmlContent(div.innerHTML);
+                                                                        updateElementProperties({ htmlContent: div.innerHTML });
+                                                                    }
+                                                                }}
+                                                                className="bg-white/10 hover:bg-white/20 text-white text-xs px-2 py-1 rounded font-bold"
+                                                            >
+                                                                B
+                                                            </button>
+                                                            <button 
+                                                                onMouseDown={(e) => {
+                                                                    e.preventDefault();
+                                                                    document.execCommand('underline', false, null);
+                                                                    const div = document.getElementById('sticky-editor-div');
+                                                                    if (div) {
+                                                                        setHtmlContent(div.innerHTML);
+                                                                        updateElementProperties({ htmlContent: div.innerHTML });
+                                                                    }
+                                                                }}
+                                                                className="bg-white/10 hover:bg-white/20 text-white text-xs px-2 py-1 rounded font-medium underline"
+                                                            >
+                                                                U
+                                                            </button>
+                                                            <button 
+                                                                onMouseDown={(e) => {
+                                                                    e.preventDefault();
+                                                                    // Use hiliteColor for background highlight
+                                                                    document.execCommand('hiliteColor', false, '#ffff00');
+                                                                    const div = document.getElementById('sticky-editor-div');
+                                                                    if (div) {
+                                                                        setHtmlContent(div.innerHTML);
+                                                                        updateElementProperties({ htmlContent: div.innerHTML });
+                                                                    }
+                                                                }}
+                                                                className="bg-[#fbbc04] hover:bg-[#fdd663] text-black text-xs px-2 py-1 rounded font-medium"
+                                                            >
+                                                                Highlight
+                                                            </button>
+                                                            
+                                                            {/* Text Color Picker in Toolbar */}
+                                                            <div className="flex gap-1 items-center border-l border-white/10 pl-2">
+                                                                {['#000000', '#ff0000', '#0000ff', '#ffffff'].map(c => (
+                                                                    <button 
+                                                                        key={c}
+                                                                        onMouseDown={(e) => {
+                                                                            e.preventDefault();
+                                                                            document.execCommand('foreColor', false, c);
+                                                                            const div = document.getElementById('sticky-editor-div');
+                                                                            if (div) {
+                                                                                setHtmlContent(div.innerHTML);
+                                                                                updateElementProperties({ htmlContent: div.innerHTML });
+                                                                            }
+                                                                        }}
+                                                                        className="w-4 h-4 rounded-full border border-white/20 hover:scale-110 transition"
+                                                                        style={ { backgroundColor: c } }
+                                                                    />
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                        
+                                                        {/* WYSIWYG Editor (ContentEditable) */}
+                                                        <div 
+                                                            id="sticky-editor-div"
+                                                            contentEditable
+                                                            onInput={(e) => {
+                                                                setHtmlContent(e.currentTarget.innerHTML);
+                                                                updateElementProperties({ htmlContent: e.currentTarget.innerHTML });
+                                                            }}
+                                                            className="w-full bg-transparent text-white text-sm outline-none min-h-[100px] font-mono mb-2 p-2 border border-white/10 rounded overflow-auto"
+                                                            style={ { whiteSpace: 'pre-wrap' } }
+                                                        />
+                                                        
+                                                        {/* HTML Code View (Read-only or Separate) */}
+                                                        <div className="border-t border-white/10 pt-2 mt-2">
+                                                            <label className="text-[10px] text-white/40 uppercase mb-1 block">HTML Code</label>
+                                                            <textarea 
+                                                                readOnly
+                                                                value={htmlContent}
+                                                                className="w-full bg-[#1e1e1e] text-white/60 text-xs outline-none min-h-[60px] font-mono p-2 rounded"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <p className="text-white/40 text-xs mt-2">選取文字並點擊上方按鈕以套用樣式。</p>
+                                                </div>
                                         </div>
                                     )}
 
                                     {/* Color Picker (Standard) */}
-                                    {selectedElement.type !== 'bpmn:TextAnnotation' && (
+                                    {selectedElement.type !== 'bpmn:Group' && (
                                         <div className="mb-5">
                                             <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">外觀設定 (Color)</label>
                                             <div className="grid grid-cols-7 gap-2">
@@ -1378,55 +1766,58 @@ HTML_TEMPLATE = """
                                         </div>
                                     )}
                                     
-                                    {/* PI Tag Config (Only for Tasks usually, but enabling for all for flexibility) */}
-                                    <div className="mb-5">
-                                        <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">PI Tag 設定</label>
-                                        <input 
-                                            value={piTag} 
-                                            onChange={(e) => {
-                                                const val = e.target.value;
-                                                if (val.split(';').length > 4) {
-                                                    alert('最多只能輸入 4 個 PI Tag');
-                                                    return;
-                                                }
-                                                updateElementProperties(val, piUnit, piPrecision, targetUrl, isFinalEnd, alwaysOn, textFontSize, textBold, textColor, textBgColor, nameFontSize);
-                                            }} 
-                                            className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" 
-                                            placeholder="例如: Tag1;Tag2 (最多4個)" 
-                                        />
-                                        <input 
-                                            value={piUnit} 
-                                            onChange={(e) => updateElementProperties(piTag, e.target.value, piPrecision, targetUrl, isFinalEnd, alwaysOn, textFontSize, textBold, textColor, textBgColor, nameFontSize)} 
-                                            className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" 
-                                            placeholder="單位 (例如: kg/hr)" 
-                                        />
-                                        <div className="flex items-center gap-2 bg-[#2d2d2d] border border-white/10 rounded-lg px-3 py-2 mb-2">
-                                            <span className="text-white/60 text-sm whitespace-nowrap">小數點位數:</span>
+                                    {/* PI Tag Config - Hide for Sticky Notes (Groups) */}
+                                    {selectedElement.type !== 'bpmn:Group' && (
+                                        <div className="mb-5">
+                                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">PI Tag 設定</label>
                                             <input 
-                                                type="number" 
-                                                min="0" 
-                                                max="5"
-                                                value={piPrecision} 
-                                                onChange={(e) => updateElementProperties(piTag, piUnit, parseInt(e.target.value), targetUrl, isFinalEnd, alwaysOn, textFontSize, textBold, textColor, textBgColor, nameFontSize)} 
-                                                className="w-full bg-transparent border-none outline-none text-white text-right"
+                                                value={piTag} 
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    if (val.split(';').length > 4) {
+                                                        alert('最多只能輸入 4 個 PI Tag');
+                                                        return;
+                                                    }
+                                                    updateElementProperties({ piTag: val });
+                                                }} 
+                                                className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" 
+                                                placeholder="例如: Tag1;Tag2 (最多4個)" 
                                             />
+                                            <input 
+                                                value={piUnit} 
+                                                onChange={(e) => updateElementProperties({ piUnit: e.target.value })} 
+                                                className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" 
+                                                placeholder="單位 (例如: kg/hr)" 
+                                            />
+                                            <div className="flex items-center gap-2 bg-[#2d2d2d] border border-white/10 rounded-lg px-3 py-2 mb-2">
+                                                <span className="text-white/60 text-sm whitespace-nowrap">小數點位數:</span>
+                                                <input 
+                                                    type="number" 
+                                                    min="0" 
+                                                    max="5"
+                                                    value={piPrecision} 
+                                                    onChange={(e) => updateElementProperties({ piPrecision: parseInt(e.target.value) })} 
+                                                    className="w-full bg-transparent border-none outline-none text-white text-right"
+                                                />
+                                            </div>
+                                            <label className="flex items-center gap-2 cursor-pointer bg-[#2d2d2d] p-2 rounded-lg border border-white/10 hover:border-[#8ab4f8] transition mb-2">
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={alwaysOn} 
+                                                    onChange={(e) => updateElementProperties({ alwaysOn: e.target.checked })} 
+                                                    className="w-4 h-4 rounded border-gray-300 text-[#8ab4f8] focus:ring-[#8ab4f8]"
+                                                />
+                                                <span className="text-sm text-white/90 font-medium">Always On (常駐顯示)</span>
+                                            </label>
                                         </div>
-                                        <label className="flex items-center gap-2 cursor-pointer bg-[#2d2d2d] p-2 rounded-lg border border-white/10 hover:border-[#8ab4f8] transition mb-2">
-                                            <input 
-                                                type="checkbox" 
-                                                checked={alwaysOn} 
-                                                onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, isFinalEnd, e.target.checked, textFontSize, textBold, textColor, textBgColor, nameFontSize)} 
-                                                className="w-4 h-4 rounded border-gray-300 text-[#8ab4f8] focus:ring-[#8ab4f8]"
-                                            />
-                                            <span className="text-sm text-white/90 font-medium">Always On (常駐顯示)</span>
-                                        </label>
-                                    </div>
+                                    )}
+
                                     {(selectedElement.type === 'bpmn:DataObjectReference' || selectedElement.type === 'bpmn:DataStoreReference') && (
                                         <div className="mb-5">
                                             <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">超連結 (Hyperlink)</label>
                                             <input 
                                                 value={targetUrl} 
-                                                onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, e.target.value, isFinalEnd, alwaysOn, textFontSize, textBold, textColor, textBgColor, nameFontSize)} 
+                                                onChange={(e) => updateElementProperties({ targetUrl: e.target.value })} 
                                                 className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition" 
                                                 placeholder="例如: https://google.com" 
                                             />
@@ -1441,7 +1832,7 @@ HTML_TEMPLATE = """
                                                 <input 
                                                     type="checkbox" 
                                                     checked={isFinalEnd} 
-                                                    onChange={(e) => updateElementProperties(piTag, piUnit, piPrecision, targetUrl, e.target.checked, alwaysOn, textFontSize, textBold, textColor, textBgColor, nameFontSize)} 
+                                                    onChange={(e) => updateElementProperties({ isFinalEnd: e.target.checked })} 
                                                     className="w-4 h-4 rounded border-gray-300 text-[#8ab4f8] focus:ring-[#8ab4f8]"
                                                 />
                                                 <span className="text-sm text-white/90 font-medium">最終 END (Final END)</span>
@@ -1543,6 +1934,162 @@ HTML_TEMPLATE = """
                     } catch (err) {
                         console.error('BPMN Import Error:', err);
                     }
+
+                    // Apply Text Styles (Operator Mode)
+                    const applyStyles = () => {
+                        const elementRegistry = viewer.get('elementRegistry');
+                        const canvas = viewer.get('canvas');
+                        
+                        elementRegistry.forEach(element => {
+                            const docs = element.businessObject.documentation;
+                            if (docs && docs.length > 0 && docs[0].text) {
+                                try {
+                                    const data = JSON.parse(docs[0].text);
+                                    const gfx = canvas.getGraphics(element);
+                                    
+                                    // 1. Apply Sticky Note Styles (Legacy: bpmn:TextAnnotation)
+                                    if (element.type === 'bpmn:TextAnnotation') {
+                                        const text = gfx.querySelector('text');
+                                        const path = gfx.querySelector('path');
+                                        
+                                        // Reset Visibility First
+                                        if (text) text.style.display = 'block';
+                                        if (path) path.style.display = 'block';
+                                        
+                                        // Remove old sticky elements
+                                        const oldBg = gfx.querySelector('.sticky-bg');
+                                        if (oldBg) oldBg.remove();
+                                        const oldFo = gfx.querySelector('.sticky-fo');
+                                        if (oldFo) oldFo.remove();
+
+                                        // Always use Rich Text / Sticky Note Rendering
+                                        // Hide default elements
+                                        if (text) text.style.display = 'none';
+                                        if (path) path.style.display = 'none';
+
+                                        // 1. Background Rect
+                                        const width = element.width || 100;
+                                        const height = element.height || 100;
+                                        
+                                        const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                                        bgRect.classList.add('sticky-bg');
+                                        bgRect.setAttribute('width', width);
+                                        bgRect.setAttribute('height', height);
+                                        bgRect.setAttribute('fill', data.noteColor || 'transparent');
+                                        bgRect.setAttribute('stroke', data.borderColor || 'transparent');
+                                        bgRect.setAttribute('fill-opacity', data.noteOpacity !== undefined ? data.noteOpacity : 1);
+                                        bgRect.setAttribute('stroke-width', '1');
+                                        gfx.prepend(bgRect);
+
+                                        // 2. ForeignObject for Rich Text
+                                        const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
+                                        fo.classList.add('sticky-fo');
+                                        fo.setAttribute('width', width);
+                                        fo.setAttribute('height', height);
+                                        fo.setAttribute('x', 0);
+                                        fo.setAttribute('y', 0);
+                                        
+                                        // Content Div
+                                        const div = document.createElement('div');
+                                        div.style.width = '100%';
+                                        div.style.height = '100%';
+                                        div.style.padding = '10px';
+                                        div.style.boxSizing = 'border-box';
+                                        div.style.overflow = 'hidden';
+                                        div.style.fontSize = `${data.textFontSize || 12}px`;
+                                        div.style.fontWeight = data.textBold ? 'bold' : 'normal';
+                                        div.style.color = data.textColor || '#000000';
+                                        div.style.fontFamily = 'Arial, sans-serif';
+                                        div.style.whiteSpace = 'pre-wrap';
+                                        div.style.wordBreak = 'break-word';
+                                        
+                                        // Use stored HTML content or fallback to plain text
+                                        div.innerHTML = data.htmlContent || (docs[0].text ? JSON.parse(docs[0].text).text : '') || '';
+                                        
+                                        fo.appendChild(div);
+                                        gfx.appendChild(fo);
+                                    }
+
+                                    // 1. Apply Sticky Note Styles (New: bpmn:Group)
+                                    if (element.type === 'bpmn:Group') {
+                                        const text = gfx.querySelector('text');
+                                        const path = gfx.querySelector('path');
+                                        const rect = gfx.querySelector('rect');
+                                        
+                                        // Reset Visibility First
+                                        if (text) text.style.display = 'block';
+                                        if (path) path.style.display = 'block';
+                                        if (rect) rect.style.display = 'block';
+                                        
+                                        // Remove old sticky elements
+                                        const oldBg = gfx.querySelector('.sticky-bg');
+                                        if (oldBg) oldBg.remove();
+                                        const oldFo = gfx.querySelector('.sticky-fo');
+                                        if (oldFo) oldFo.remove();
+
+                                        // Always use Rich Text / Sticky Note Rendering if data exists
+                                        if (data.noteColor || data.htmlContent) {
+                                            // Hide default elements
+                                            if (text) text.style.display = 'none';
+                                            if (path) path.style.display = 'none';
+                                            if (rect) rect.style.display = 'none';
+
+                                            // 1. Background Rect
+                                            const width = element.width || 300;
+                                            const height = element.height || 300;
+                                            
+                                            const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                                            bgRect.classList.add('sticky-bg');
+                                            bgRect.setAttribute('width', width);
+                                            bgRect.setAttribute('height', height);
+                                            bgRect.setAttribute('fill', data.noteColor || 'transparent');
+                                            bgRect.setAttribute('stroke', data.borderColor || 'transparent');
+                                            bgRect.setAttribute('fill-opacity', data.noteOpacity !== undefined ? data.noteOpacity : 1);
+                                            bgRect.setAttribute('stroke-width', '1');
+                                            gfx.prepend(bgRect);
+
+                                            // 2. ForeignObject for Rich Text
+                                            const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
+                                            fo.classList.add('sticky-fo');
+                                            fo.setAttribute('width', width);
+                                            fo.setAttribute('height', height);
+                                            fo.setAttribute('x', 0);
+                                            fo.setAttribute('y', 0);
+                                            
+                                            // Content Div
+                                            const div = document.createElement('div');
+                                            div.style.width = '100%';
+                                            div.style.height = '100%';
+                                            div.style.padding = '10px';
+                                            div.style.boxSizing = 'border-box';
+                                            div.style.overflow = 'hidden';
+                                            div.style.fontSize = `${data.textFontSize || 12}px`;
+                                            div.style.fontWeight = data.textBold ? 'bold' : 'normal';
+                                            div.style.color = data.textColor || '#000000';
+                                            div.style.fontFamily = 'Arial, sans-serif';
+                                            div.style.whiteSpace = 'pre-wrap';
+                                            div.style.wordBreak = 'break-word';
+                                            
+                                            // Use stored HTML content or fallback to plain text
+                                            div.innerHTML = data.htmlContent || (docs[0].text ? JSON.parse(docs[0].text).text : '') || '';
+                                            
+                                            fo.appendChild(div);
+                                            gfx.appendChild(fo);
+                                        }
+                                    }
+
+                                    // 2. Apply Name Font Size (Operator Mode)
+                                    if (data.nameFontSize) {
+                                        const label = gfx.querySelector('.djs-label');
+                                        if (label) {
+                                            label.style.fontSize = `${data.nameFontSize}px`;
+                                        }
+                                    }
+                                } catch(e) {}
+                            }
+                        });
+                    };
+                    applyStyles();
                     
                     // 4. Interaction Logic
                     const eventBus = viewer.get('eventBus');
@@ -1640,59 +2187,7 @@ HTML_TEMPLATE = """
             }, [processId]);
 
             // Apply Text Styles (Operator Mode)
-            useEffect(() => {
-                if (!viewerRef.current) return;
-                
-                const applyStyles = () => {
-                    const elementRegistry = viewerRef.current.get('elementRegistry');
-                    const canvas = viewerRef.current.get('canvas');
-                    
-                    elementRegistry.forEach(element => {
-                        const docs = element.businessObject.documentation;
-                        if (docs && docs.length > 0 && docs[0].text) {
-                            try {
-                                const data = JSON.parse(docs[0].text);
-                                const gfx = canvas.getGraphics(element);
-                                
-                                // 1. Apply TextAnnotation Styles
-                                if (element.type === 'bpmn:TextAnnotation') {
-                                    const text = gfx.querySelector('text');
-                                    if (text) {
-                                        if (data.textFontSize) text.style.fontSize = `${data.textFontSize}px`;
-                                        if (data.textBold) text.style.fontWeight = 'bold';
-                                        else text.style.fontWeight = 'normal';
-                                        if (data.textColor) {
-                                            text.style.fill = data.textColor;
-                                            const path = gfx.querySelector('path');
-                                            if (path) path.style.stroke = data.textColor;
-                                        }
-                                    }
-                                }
 
-                                // 2. Apply Name Font Size (Operator Mode)
-                                if (data.nameFontSize) {
-                                    const label = gfx.querySelector('.djs-label');
-                                    if (label) {
-                                        label.style.fontSize = `${data.nameFontSize}px`;
-                                    }
-                                }
-                            } catch(e) {}
-                        }
-                    });
-                };
-
-                // Apply on load and potentially on updates if we were editing live (which we aren't in Operator)
-                // But we should run it once after import.
-                const eventBus = viewerRef.current.get('eventBus');
-                eventBus.on('import.done', applyStyles);
-                
-                // Also run immediately in case import is already done
-                applyStyles();
-
-                return () => {
-                    eventBus.off('import.done', applyStyles);
-                };
-            }, [process]); // Re-run when process loads
 
             // Always On PI Display Manager
             useEffect(() => {
@@ -2264,18 +2759,134 @@ HTML_TEMPLATE = """
                                         const data = JSON.parse(docs[0].text);
                                         const gfx = canvas.getGraphics(element);
                                         
-                                        // 1. Apply TextAnnotation Styles
+                                        // 1. Apply Sticky Note Styles (Legacy: bpmn:TextAnnotation)
                                         if (element.type === 'bpmn:TextAnnotation') {
                                             const text = gfx.querySelector('text');
-                                            if (text) {
-                                                if (data.textFontSize) text.style.fontSize = `${data.textFontSize}px`;
-                                                if (data.textBold) text.style.fontWeight = 'bold';
-                                                else text.style.fontWeight = 'normal';
-                                                if (data.textColor) {
-                                                    text.style.fill = data.textColor;
-                                                    const path = gfx.querySelector('path');
-                                                    if (path) path.style.stroke = data.textColor;
-                                                }
+                                            const path = gfx.querySelector('path');
+                                            
+                                            // Reset Visibility First
+                                            if (text) text.style.display = 'block';
+                                            if (path) path.style.display = 'block';
+                                            
+                                            // Remove old sticky elements
+                                            const oldBg = gfx.querySelector('.sticky-bg');
+                                            if (oldBg) oldBg.remove();
+                                            const oldFo = gfx.querySelector('.sticky-fo');
+                                            if (oldFo) oldFo.remove();
+
+                                            // Always use Rich Text / Sticky Note Rendering
+                                            // Hide default elements
+                                            if (text) text.style.display = 'none';
+                                            if (path) path.style.display = 'none';
+
+                                            // 1. Background Rect
+                                            const width = element.width || 100;
+                                            const height = element.height || 100;
+                                            
+                                            const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                                            bgRect.classList.add('sticky-bg');
+                                            bgRect.setAttribute('width', width);
+                                            bgRect.setAttribute('height', height);
+                                            bgRect.setAttribute('fill', data.noteColor || 'transparent');
+                                            bgRect.setAttribute('stroke', data.borderColor || 'transparent');
+                                            bgRect.setAttribute('fill-opacity', data.noteOpacity !== undefined ? data.noteOpacity : 1);
+                                            bgRect.setAttribute('stroke-width', '1');
+                                            gfx.prepend(bgRect);
+
+                                            // 2. ForeignObject for Rich Text
+                                            const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
+                                            fo.classList.add('sticky-fo');
+                                            fo.setAttribute('width', width);
+                                            fo.setAttribute('height', height);
+                                            fo.setAttribute('x', 0);
+                                            fo.setAttribute('y', 0);
+                                            
+                                            // Content Div
+                                            const div = document.createElement('div');
+                                            div.style.width = '100%';
+                                            div.style.height = '100%';
+                                            div.style.padding = '10px';
+                                            div.style.boxSizing = 'border-box';
+                                            div.style.overflow = 'hidden';
+                                            div.style.fontSize = `${data.textFontSize || 12}px`;
+                                            div.style.fontWeight = data.textBold ? 'bold' : 'normal';
+                                            div.style.color = data.textColor || '#000000';
+                                            div.style.fontFamily = 'Arial, sans-serif';
+                                            div.style.whiteSpace = 'pre-wrap';
+                                            div.style.wordBreak = 'break-word';
+                                            
+                                            // Use stored HTML content or fallback to plain text
+                                            div.innerHTML = data.htmlContent || (docs[0].text ? JSON.parse(docs[0].text).text : '') || '';
+                                            
+                                            fo.appendChild(div);
+                                            gfx.appendChild(fo);
+                                        }
+
+                                        // 1. Apply Sticky Note Styles (New: bpmn:Group)
+                                        if (element.type === 'bpmn:Group') {
+                                            const text = gfx.querySelector('text');
+                                            const path = gfx.querySelector('path');
+                                            const rect = gfx.querySelector('rect');
+                                            
+                                            // Reset Visibility First
+                                            if (text) text.style.display = 'block';
+                                            if (path) path.style.display = 'block';
+                                            if (rect) rect.style.display = 'block';
+                                            
+                                            // Remove old sticky elements
+                                            const oldBg = gfx.querySelector('.sticky-bg');
+                                            if (oldBg) oldBg.remove();
+                                            const oldFo = gfx.querySelector('.sticky-fo');
+                                            if (oldFo) oldFo.remove();
+
+                                            // Always use Rich Text / Sticky Note Rendering if data exists
+                                            if (data.noteColor || data.htmlContent) {
+                                                // Hide default elements
+                                                if (text) text.style.display = 'none';
+                                                if (path) path.style.display = 'none';
+                                                if (rect) rect.style.display = 'none';
+
+                                                // 1. Background Rect
+                                                const width = element.width || 300;
+                                                const height = element.height || 300;
+                                                
+                                                const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                                                bgRect.classList.add('sticky-bg');
+                                                bgRect.setAttribute('width', width);
+                                                bgRect.setAttribute('height', height);
+                                                bgRect.setAttribute('fill', data.noteColor || 'transparent');
+                                                bgRect.setAttribute('stroke', data.borderColor || 'transparent');
+                                                bgRect.setAttribute('fill-opacity', data.noteOpacity !== undefined ? data.noteOpacity : 1);
+                                                bgRect.setAttribute('stroke-width', '1');
+                                                gfx.prepend(bgRect);
+
+                                                // 2. ForeignObject for Rich Text
+                                                const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
+                                                fo.classList.add('sticky-fo');
+                                                fo.setAttribute('width', width);
+                                                fo.setAttribute('height', height);
+                                                fo.setAttribute('x', 0);
+                                                fo.setAttribute('y', 0);
+                                                
+                                                // Content Div
+                                                const div = document.createElement('div');
+                                                div.style.width = '100%';
+                                                div.style.height = '100%';
+                                                div.style.padding = '10px';
+                                                div.style.boxSizing = 'border-box';
+                                                div.style.overflow = 'hidden';
+                                                div.style.fontSize = `${data.textFontSize || 12}px`;
+                                                div.style.fontWeight = data.textBold ? 'bold' : 'normal';
+                                                div.style.color = data.textColor || '#000000';
+                                                div.style.fontFamily = 'Arial, sans-serif';
+                                                div.style.whiteSpace = 'pre-wrap';
+                                                div.style.wordBreak = 'break-word';
+                                                
+                                                // Use stored HTML content or fallback to plain text
+                                                div.innerHTML = data.htmlContent || (docs[0].text ? JSON.parse(docs[0].text).text : '') || '';
+                                                
+                                                fo.appendChild(div);
+                                                gfx.appendChild(fo);
                                             }
                                         }
 
