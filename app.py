@@ -515,7 +515,7 @@ HTML_TEMPLATE = """
     <div id="root" class="h-full"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef, useMemo } = React;
+        const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
         // --- Utils ---
         const API_BASE = "{{ url_for('index') }}api";
@@ -561,7 +561,7 @@ HTML_TEMPLATE = """
         // --- New Components ---
 
         // Timeline Viewer
-        const TimelineViewer = ({ logs, headerActions }) => {
+        const TimelineViewer = ({ logs, headerActions, onUpdateLog }) => {
             const scrollRef = useRef(null);
             
             useEffect(() => {
@@ -600,41 +600,43 @@ HTML_TEMPLATE = """
                                     <div className="absolute top-[18px] left-[50%] w-[calc(100%+32px)] h-[2px] bg-white/10 -z-0"></div>
                                 )}
                                 
-                                {/* Node */}
-                                <div className={`w-9 h-9 rounded-full border-2 flex items-center justify-center z-10 mb-1 transition-all ${
-                                    log.message.startsWith('任務完成') ? 'bg-[#81c995] border-[#81c995] text-[#0f5132]' :
-                                    log.message.startsWith('任務開始') ? 'bg-[#8ab4f8] border-[#8ab4f8] text-[#002d6f]' :
-                                    log.message.startsWith('任務中止') ? 'bg-[#f28b82] border-[#f28b82] text-[#5c1e1e]' :
-                                    'bg-[#2d2d2d] border-white/20 text-white/60'
+                                {/* Node Circle */}
+                                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold z-10 mb-2 shadow-lg transition-transform group-hover:scale-110 ${
+                                    log.message.includes('任務完成') ? 'bg-[#81c995] text-[#0f5132]' : 'bg-[#8ab4f8] text-[#002d6f]'
                                 }`}>
                                     {idx + 1}
                                 </div>
                                 
-                                {/* Content */}
-                                <div className="text-center flex flex-col items-center">
-                                    <div className="text-xs font-mono text-white/40 mb-1">{log.time}</div>
+                                <div className="text-xs text-white/50 mt-1">{log.time}</div>
+                                <div className="text-sm font-medium text-white/90 mt-1 text-center px-2">{log.message.split(': ')[1] || log.message}</div>
+                                
+                                {/* Indicators Container */}
+                                <div className="flex gap-2 mt-2">
+                                    {/* Note Indicator */}
+                                    {log.note && (
+                                        <div 
+                                            className="text-xs text-[#fbbc04] font-bold cursor-pointer animate-pulse hover:scale-110 transition border border-[#fbbc04]/30 px-2 py-0.5 rounded bg-[#fbbc04]/10"
+                                            title={log.note}
+                                            onClick={() => {
+                                                if (onUpdateLog) {
+                                                    const newNote = prompt('編輯備註:', log.note);
+                                                    if (newNote !== null) {
+                                                        onUpdateLog(idx, newNote);
+                                                    }
+                                                }
+                                            }}
+                                        >
+                                            備註
+                                        </div>
+                                    )}
 
-                                    {/* Task Name */}
-                                    <div className="text-xs text-white/80 max-w-[140px] truncate mb-1" title={log.message}>
-                                        {log.message.includes(': ') ? log.message.split(': ')[1] : log.message}
-                                    </div>
-
-                                    {/* PI Tag Values (Tooltip) */}
+                                    {/* Data Indicator */}
                                     {log.value && log.value !== '-' && log.value !== '"-"' && (
-                                        <div className="relative group/tooltip mt-1">
-                                            <div className="text-[10px] text-[#fdd663] bg-[#fdd663]/10 px-2 py-1 rounded border border-[#fdd663]/20 whitespace-nowrap cursor-help">
-                                                {log.value.split(', ').length} 筆數據
-                                            </div>
-                                            {/* Tooltip */}
-                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/tooltip:block bg-[#2d2d2d] border border-white/20 rounded-lg p-2 shadow-xl z-50 min-w-[150px]">
-                                                {log.value.split(', ').map((v, i) => (
-                                                    <div key={i} className="text-xs text-[#fdd663] whitespace-nowrap mb-1 last:mb-0 font-mono">
-                                                        {v}
-                                                    </div>
-                                                ))}
-                                                {/* Arrow */}
-                                                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[#2d2d2d]"></div>
-                                            </div>
+                                        <div 
+                                            className="text-xs text-[#81c995] font-bold cursor-help hover:scale-110 transition border border-[#81c995]/30 px-2 py-0.5 rounded bg-[#81c995]/10"
+                                            title={log.value}
+                                        >
+                                            數據
                                         </div>
                                     )}
                                 </div>
@@ -644,6 +646,7 @@ HTML_TEMPLATE = """
                 </div>
             );
         };
+
         
         // --- Components ---
         
@@ -956,6 +959,7 @@ HTML_TEMPLATE = """
             const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
             const [isFinalEnd, setIsFinalEnd] = useState(false);
             const [isPanelOpen, setIsPanelOpen] = useState(true); // 1. Collapsible Panel State
+            const isComposing = useRef(false); // Track IME composition state
 
             const GOOGLE_COLORS = [
                 '#EA4335', '#E91E63', '#9C27B0', '#673AB7', '#3F51B5', '#4285F4', '#03A9F4', 
@@ -1081,6 +1085,13 @@ HTML_TEMPLATE = """
 
                 modeler.on('commandStack.changed', () => {
                     setHasUnsavedChanges(true);
+                });
+
+                // Disable Double Click for Sticky Notes (bpmn:Group)
+                modeler.on('element.dblclick', 10000, (e) => {
+                    if (e.element.type === 'bpmn:Group') {
+                        return false; // Prevent default behavior (Label Editing)
+                    }
                 });
 
                 // Mouse Wheel Zoom
@@ -1545,18 +1556,12 @@ HTML_TEMPLATE = """
                                                         <div className="flex gap-2 mb-2 border-b border-white/10 pb-2 flex-wrap">
                                                             <button 
                                                                 onClick={() => {
-                                                                    const textarea = document.getElementById('sticky-editor');
-                                                                    if (!textarea) return;
-                                                                    const start = textarea.selectionStart;
-                                                                    const end = textarea.selectionEnd;
-                                                                    const text = textarea.value;
-                                                                    if (start === end) return;
-                                                                    const selected = text.substring(start, end);
-                                                                    const before = text.substring(0, start);
-                                                                    const after = text.substring(end);
-                                                                    const newContent = `${before}<b>${selected}</b>${after}`;
-                                                                    setHtmlContent(newContent);
-                                                                    updateElementProperties({ htmlContent: newContent });
+                                                                    document.execCommand('bold', false, null);
+                                                                    const editor = document.getElementById('sticky-wysiwyg');
+                                                                    if (editor) {
+                                                                        setHtmlContent(editor.innerHTML);
+                                                                        updateElementProperties({ htmlContent: editor.innerHTML });
+                                                                    }
                                                                 }}
                                                                 className="bg-white/10 hover:bg-white/20 text-white text-xs px-2 py-1 rounded font-bold"
                                                             >
@@ -1564,23 +1569,12 @@ HTML_TEMPLATE = """
                                                             </button>
                                                             <button 
                                                                 onClick={() => {
-                                                                    const textarea = document.getElementById('sticky-editor');
-                                                                    if (!textarea) return;
-                                                                    
-                                                                    const start = textarea.selectionStart;
-                                                                    const end = textarea.selectionEnd;
-                                                                    const text = textarea.value;
-                                                                    
-                                                                    if (start === end) return;
-                                                                    
-                                                                    const selected = text.substring(start, end);
-                                                                    const before = text.substring(0, start);
-                                                                    const after = text.substring(end);
-                                                                    
-                                                                    const newContent = `${before}<u>${selected}</u>${after}`;
-                                                                    
-                                                                    setHtmlContent(newContent);
-                                                                    updateElementProperties({ htmlContent: newContent });
+                                                                    document.execCommand('underline', false, null);
+                                                                    const editor = document.getElementById('sticky-wysiwyg');
+                                                                    if (editor) {
+                                                                        setHtmlContent(editor.innerHTML);
+                                                                        updateElementProperties({ htmlContent: editor.innerHTML });
+                                                                    }
                                                                 }}
                                                                 className="bg-white/10 hover:bg-white/20 text-white text-xs px-2 py-1 rounded font-medium underline"
                                                             >
@@ -1588,18 +1582,12 @@ HTML_TEMPLATE = """
                                                             </button>
                                                             <button 
                                                                 onClick={() => {
-                                                                    const textarea = document.getElementById('sticky-editor');
-                                                                    if (!textarea) return;
-                                                                    const start = textarea.selectionStart;
-                                                                    const end = textarea.selectionEnd;
-                                                                    const text = textarea.value;
-                                                                    if (start === end) return;
-                                                                    const selected = text.substring(start, end);
-                                                                    const before = text.substring(0, start);
-                                                                    const after = text.substring(end);
-                                                                    const newContent = `${before}<span style="background-color: #ffff00">${selected}</span>${after}`;
-                                                                    setHtmlContent(newContent);
-                                                                    updateElementProperties({ htmlContent: newContent });
+                                                                    document.execCommand('hiliteColor', false, '#ffff00');
+                                                                    const editor = document.getElementById('sticky-wysiwyg');
+                                                                    if (editor) {
+                                                                        setHtmlContent(editor.innerHTML);
+                                                                        updateElementProperties({ htmlContent: editor.innerHTML });
+                                                                    }
                                                                 }}
                                                                 className="bg-[#fbbc04] hover:bg-[#fdd663] text-black text-xs px-2 py-1 rounded font-medium"
                                                             >
@@ -1612,18 +1600,12 @@ HTML_TEMPLATE = """
                                                                     <button 
                                                                         key={c}
                                                                         onClick={() => {
-                                                                            const textarea = document.getElementById('sticky-editor');
-                                                                            if (!textarea) return;
-                                                                            const start = textarea.selectionStart;
-                                                                            const end = textarea.selectionEnd;
-                                                                            const text = textarea.value;
-                                                                            if (start === end) return;
-                                                                            const selected = text.substring(start, end);
-                                                                            const before = text.substring(0, start);
-                                                                            const after = text.substring(end);
-                                                                            const newContent = `${before}<span style="color: ${c}">${selected}</span>${after}`;
-                                                                            setHtmlContent(newContent);
-                                                                            updateElementProperties({ htmlContent: newContent });
+                                                                            document.execCommand('foreColor', false, c);
+                                                                            const editor = document.getElementById('sticky-wysiwyg');
+                                                                            if (editor) {
+                                                                                setHtmlContent(editor.innerHTML);
+                                                                                updateElementProperties({ htmlContent: editor.innerHTML });
+                                                                            }
                                                                         }}
                                                                         className="w-4 h-4 rounded-full border border-white/20 hover:scale-110 transition"
                                                                         style={ { backgroundColor: c } }
@@ -1631,18 +1613,39 @@ HTML_TEMPLATE = """
                                                                 ))}
                                                             </div>
                                                         </div>
-                                                        <textarea 
-                                                            id="sticky-editor"
-                                                            value={htmlContent} 
-                                                            onChange={(e) => {
-                                                                setHtmlContent(e.target.value);
-                                                                updateElementProperties({ htmlContent: e.target.value });
+                                                        
+                                                        {/* WYSIWYG Editor */}
+                                                        <div 
+                                                            id="sticky-wysiwyg"
+                                                            contentEditable
+                                                            className="w-full bg-white text-black text-sm outline-none min-h-[100px] p-2 rounded-t mb-1 overflow-auto"
+                                                            style={ { whiteSpace: 'pre-wrap' } }
+                                                            dangerouslySetInnerHTML={ { __html: htmlContent } }
+                                                            onCompositionStart={() => {
+                                                                isComposing.current = true;
                                                             }}
-                                                            className="w-full bg-transparent text-white text-sm outline-none min-h-[100px] font-mono"
-                                                            placeholder="支援 HTML 標籤..."
+                                                            onCompositionEnd={(e) => {
+                                                                isComposing.current = false;
+                                                                setHtmlContent(e.currentTarget.innerHTML);
+                                                                updateElementProperties({ htmlContent: e.currentTarget.innerHTML });
+                                                            }}
+                                                            onInput={(e) => {
+                                                                if (!isComposing.current) {
+                                                                    setHtmlContent(e.currentTarget.innerHTML);
+                                                                    updateElementProperties({ htmlContent: e.currentTarget.innerHTML });
+                                                                }
+                                                            }}
+                                                        />
+                                                        
+                                                        {/* HTML Preview */}
+                                                        <textarea 
+                                                            readOnly
+                                                            value={htmlContent} 
+                                                            className="w-full bg-[#1e1e1e] text-white/50 text-xs outline-none h-[60px] font-mono p-2 rounded-b border-t border-white/10"
+                                                            placeholder="HTML 預覽..."
                                                         />
                                                     </div>
-                                                    <p className="text-white/40 text-xs mt-2">選取文字並點擊上方按鈕以套用樣式。</p>
+                                                    <p className="text-white/40 text-xs mt-2">上方為編輯區，下方為 HTML 原始碼預覽。</p>
                                                 </div>
                                         </div>
                                     )}
@@ -1665,48 +1668,50 @@ HTML_TEMPLATE = """
                                     )}
                                     
                                     {/* PI Tag Config (Only for Tasks usually, but enabling for all for flexibility) */}
-                                    <div className="mb-5">
-                                        <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">PI Tag 設定</label>
-                                        <input 
-                                            value={piTag} 
-                                            onChange={(e) => {
-                                                const val = e.target.value;
-                                                if (val.split(';').length > 4) {
-                                                    alert('最多只能輸入 4 個 PI Tag');
-                                                    return;
-                                                }
-                                                updateElementProperties({ piTag: val });
-                                            }} 
-                                            className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" 
-                                            placeholder="例如: Tag1;Tag2 (最多4個)" 
-                                        />
-                                        <input 
-                                            value={piUnit} 
-                                            onChange={(e) => updateElementProperties({ piUnit: e.target.value })} 
-                                            className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" 
-                                            placeholder="單位 (例如: kg/hr)" 
-                                        />
-                                        <div className="flex items-center gap-2 bg-[#2d2d2d] border border-white/10 rounded-lg px-3 py-2 mb-2">
-                                            <span className="text-white/60 text-sm whitespace-nowrap">小數點位數:</span>
+                                    {selectedElement.type !== 'bpmn:Group' && (
+                                        <div className="mb-5">
+                                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">PI Tag 設定</label>
                                             <input 
-                                                type="number" 
-                                                min="0" 
-                                                max="5"
-                                                value={piPrecision} 
-                                                onChange={(e) => updateElementProperties({ piPrecision: parseInt(e.target.value) })} 
-                                                className="w-full bg-transparent border-none outline-none text-white text-right"
+                                                value={piTag} 
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    if (val.split(';').length > 4) {
+                                                        alert('最多只能輸入 4 個 PI Tag');
+                                                        return;
+                                                    }
+                                                    updateElementProperties({ piTag: val });
+                                                }} 
+                                                className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" 
+                                                placeholder="例如: Tag1;Tag2 (最多4個)" 
                                             />
+                                            <input 
+                                                value={piUnit} 
+                                                onChange={(e) => updateElementProperties({ piUnit: e.target.value })} 
+                                                className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-3 py-2 text-white outline-none transition mb-2" 
+                                                placeholder="單位 (例如: kg/hr)" 
+                                            />
+                                            <div className="flex items-center gap-2 bg-[#2d2d2d] border border-white/10 rounded-lg px-3 py-2 mb-2">
+                                                <span className="text-white/60 text-sm whitespace-nowrap">小數點位數:</span>
+                                                <input 
+                                                    type="number" 
+                                                    min="0" 
+                                                    max="5"
+                                                    value={piPrecision} 
+                                                    onChange={(e) => updateElementProperties({ piPrecision: parseInt(e.target.value) })} 
+                                                    className="w-full bg-transparent border-none outline-none text-white text-right"
+                                                />
+                                            </div>
+                                            <label className="flex items-center gap-2 cursor-pointer bg-[#2d2d2d] p-2 rounded-lg border border-white/10 hover:border-[#8ab4f8] transition mb-2">
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={alwaysOn} 
+                                                    onChange={(e) => updateElementProperties({ alwaysOn: e.target.checked })} 
+                                                    className="w-4 h-4 rounded border-gray-300 text-[#8ab4f8] focus:ring-[#8ab4f8]"
+                                                />
+                                                <span className="text-sm text-white/90 font-medium">Always On (常駐顯示)</span>
+                                            </label>
                                         </div>
-                                        <label className="flex items-center gap-2 cursor-pointer bg-[#2d2d2d] p-2 rounded-lg border border-white/10 hover:border-[#8ab4f8] transition mb-2">
-                                            <input 
-                                                type="checkbox" 
-                                                checked={alwaysOn} 
-                                                onChange={(e) => updateElementProperties({ alwaysOn: e.target.checked })} 
-                                                className="w-4 h-4 rounded border-gray-300 text-[#8ab4f8] focus:ring-[#8ab4f8]"
-                                            />
-                                            <span className="text-sm text-white/90 font-medium">Always On (常駐顯示)</span>
-                                        </label>
-                                    </div>
+                                    )}
                                     {(selectedElement.type === 'bpmn:DataObjectReference' || selectedElement.type === 'bpmn:DataStoreReference') && (
                                         <div className="mb-5">
                                             <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">超連結 (Hyperlink)</label>
@@ -1785,6 +1790,99 @@ HTML_TEMPLATE = """
             };
 
             useEffect(() => {
+                // Define applyStyles locally
+                const applyStyles = () => {
+                    const viewer = viewerRef.current;
+                    if (!viewer) return;
+                    
+                    const elementRegistry = viewer.get('elementRegistry');
+                    const canvas = viewer.get('canvas');
+
+                    elementRegistry.forEach(element => {
+                        if (element.type === 'bpmn:TextAnnotation' || element.type === 'bpmn:Group') {
+                            const businessObj = element.businessObject;
+                            let data = {};
+                            
+                            if (businessObj.documentation && businessObj.documentation.length > 0) {
+                                try {
+                                    data = JSON.parse(businessObj.documentation[0].text);
+                                } catch (e) {}
+                            }
+
+                            // Default for Group
+                            if (element.type === 'bpmn:Group') {
+                                if (!data.noteColor) data.noteColor = '#fff9c4';
+                                if (!data.borderColor) data.borderColor = '#d6b656';
+                            }
+
+                            const hasStyle = data.noteColor || data.htmlContent || data.textFontSize || data.textColor || data.borderColor;
+                            
+                            if (hasStyle) {
+                                try {
+                                    const gfx = canvas.getGraphics(element);
+                                    if (!gfx) return;
+
+                                    // Clear
+                                    const existingBg = gfx.querySelector('.sticky-bg');
+                                    if (existingBg) existingBg.remove();
+                                    const existingFo = gfx.querySelector('.sticky-fo');
+                                    if (existingFo) existingFo.remove();
+
+                                    // Hide defaults
+                                    ['text', 'path', 'rect'].forEach(tag => {
+                                        const el = gfx.querySelector(tag);
+                                        if (el) el.style.display = 'none';
+                                    });
+
+                                    // Dimensions
+                                    let width = element.width || (element.di && element.di.bounds && element.di.bounds.width) || 300;
+                                    let height = element.height || (element.di && element.di.bounds && element.di.bounds.height) || 300;
+
+                                    // 1. Background
+                                    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                                    rect.setAttribute('class', 'sticky-bg');
+                                    rect.setAttribute('width', width);
+                                    rect.setAttribute('height', height);
+                                    rect.setAttribute('rx', '10');
+                                    rect.setAttribute('ry', '10');
+                                    rect.setAttribute('fill', data.noteColor || '#fff9c4');
+                                    rect.setAttribute('stroke', data.borderColor || '#d6b656');
+                                    rect.setAttribute('stroke-width', '2');
+                                    rect.setAttribute('fill-opacity', data.noteOpacity !== undefined ? data.noteOpacity : 1);
+                                    
+                                    const visual = gfx.querySelector('.djs-visual');
+                                    if (visual) {
+                                        if (visual.firstChild) visual.insertBefore(rect, visual.firstChild);
+                                        else visual.appendChild(rect);
+                                    }
+
+                                    // 2. Content
+                                    if (data.htmlContent) {
+                                        const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
+                                        fo.setAttribute('class', 'sticky-fo');
+                                        fo.setAttribute('width', width - 20);
+                                        fo.setAttribute('height', height - 20);
+                                        fo.setAttribute('x', '10');
+                                        fo.setAttribute('y', '10');
+                                        
+                                        const div = document.createElement('div');
+                                        div.xmlns = 'http://www.w3.org/1999/xhtml';
+                                        div.style.width = '100%';
+                                        div.style.height = '100%';
+                                        div.style.overflow = 'auto';
+                                        div.style.fontSize = `${data.textFontSize || 14}px`;
+                                        div.style.color = data.textColor || '#000000';
+                                        div.innerHTML = data.htmlContent;
+                                        
+                                        fo.appendChild(div);
+                                        if (visual) visual.appendChild(fo);
+                                    }
+                                } catch (e) { console.error(e); }
+                            }
+                        }
+                    });
+                };
+
                 const load = async () => {
                     if (!processId) return;
                     
@@ -1856,47 +1954,54 @@ HTML_TEMPLATE = """
                     ];
                     
                     // We only want to block mousedown if it leads to a move/edit. 
-                    // Actually, blocking shape.move.start is usually enough for moves.
-                    // Let's stick to the specific start events.
-                    
-                    const blockedEvents = [
-                        'shape.move.start',
-                        'connection.create.start',
-                        'element.dblclick',
-                        'contextPad.open',
-                        'palette.create',
-                        'shape.resize.start',
-                        'connection.segment.move.start',
-                        'bendlpoints.move.start',
-                        'connection.layout.start',
-                        'interactionEvents.create', // Blocks context pad creation
-                        'lasso.start', // Block lasso tool
-                        'global-connect.start',
-                        'space-tool.selection.start'
-                    ];
-
-                    blockedEvents.forEach(e => eventBus.on(e, 10000, () => false));
-
-                    // Hide Palette and Context Pad via CSS
-                    const canvasContainer = containerRef.current;
-                    const style = document.createElement('style');
-                    style.innerHTML = `
-                        .djs-palette, .djs-context-pad { display: none !important; }
-                        .djs-outline { display: none !important; }
-                    `;
-                    canvasContainer.appendChild(style);
-
-                    // 5. Click Handler
-                    eventBus.on('element.click', (e) => {
-                        const element = e.element;
-                        const type = element.type;
-                        if (type === 'bpmn:Task' || type === 'bpmn:UserTask' || type === 'bpmn:ManualTask' || type === 'bpmn:StartEvent' || type === 'bpmn:EndEvent') {
-                            // Use Custom State for latest data
-                            const state = viewer._customState || { runningTaskId: null, logs: [] };
-                            openTaskWindow(element, state.logs, state.runningTaskId);
-                        }
+                    events.forEach(event => {
+                        eventBus.on(event, 10000, (e) => {
+                            // Allow clicking on elements to open task window
+                            if (event === 'element.mousedown') return; 
+                            return false; 
+                        });
                     });
 
+                    eventBus.on('element.click', (e) => {
+                        const element = e.element;
+                        
+                        // Handle Hyperlinks (DataObjectReference)
+                        if (element.type === 'bpmn:DataObjectReference' || element.type === 'bpmn:DataStoreReference') {
+                            const docs = element.businessObject.documentation;
+                            if (docs && docs.length > 0 && docs[0].text) {
+                                try {
+                                    const data = JSON.parse(docs[0].text);
+                                    if (data.targetUrl) {
+                                        window.open(data.targetUrl, '_blank');
+                                        return;
+                                    }
+                                } catch(e) {}
+                            }
+                        }
+
+                        // Handle Tasks / Start Event / End Event
+                        const interactableTypes = [
+                            'bpmn:Task', 
+                            'bpmn:UserTask', 
+                            'bpmn:ServiceTask', 
+                            'bpmn:SendTask', 
+                            'bpmn:ReceiveTask', 
+                            'bpmn:ManualTask', 
+                            'bpmn:BusinessRuleTask', 
+                            'bpmn:ScriptTask', 
+                            'bpmn:CallActivity',
+                            'bpmn:StartEvent', 
+                            'bpmn:EndEvent'
+                        ];
+
+                        if (interactableTypes.includes(element.type)) {
+                            // Use current state from ref/customState to avoid closure staleness
+                            const currentLogs = viewer._customState.logs || [];
+                            const activeTaskId = viewer._customState.runningTaskId;
+                            
+                            openTaskWindow(element, currentLogs, activeTaskId);
+                        }
+                    });
                     // 6. Highlight Running Task
                     if (sData && sData.current_task_id) {
                         try { 
@@ -1919,190 +2024,20 @@ HTML_TEMPLATE = """
                             }
                         });
                     }
+
+                    // Apply Styles
+                    setTimeout(applyStyles, 100);
+                    setTimeout(applyStyles, 500);
                 };
+
                 load();
-                // Ensure clean load
+                
                 return () => { 
                     if(viewerRef.current) {
-                        if (viewerRef.current._pollInterval) clearInterval(viewerRef.current._pollInterval);
                         viewerRef.current.destroy(); 
                     }
                 };
             }, [processId]);
-
-            // Apply Text Styles (Operator Mode)
-            useEffect(() => {
-                if (!viewerRef.current) return;
-                
-                const applyStyles = () => {
-                    const elementRegistry = viewerRef.current.get('elementRegistry');
-                    const canvas = viewerRef.current.get('canvas');
-                    
-                    elementRegistry.forEach(element => {
-                        const docs = element.businessObject.documentation;
-                        if (docs && docs.length > 0 && docs[0].text) {
-                            try {
-                                const data = JSON.parse(docs[0].text);
-                                const gfx = canvas.getGraphics(element);
-                                
-                                // 1. Apply Sticky Note Styles (Legacy: bpmn:TextAnnotation)
-                                if (element.type === 'bpmn:TextAnnotation') {
-                                    const text = gfx.querySelector('text');
-                                    const path = gfx.querySelector('path');
-                                    
-                                    // Reset Visibility First
-                                    if (text) text.style.display = 'block';
-                                    if (path) path.style.display = 'block';
-                                    
-                                    // Remove old sticky elements
-                                    const oldBg = gfx.querySelector('.sticky-bg');
-                                    if (oldBg) oldBg.remove();
-                                    const oldFo = gfx.querySelector('.sticky-fo');
-                                    if (oldFo) oldFo.remove();
-
-                                    // Always use Rich Text / Sticky Note Rendering
-                                    // Hide default elements
-                                    if (text) text.style.display = 'none';
-                                    if (path) path.style.display = 'none';
-
-                                    // 1. Background Rect
-                                    const width = element.width || 100;
-                                    const height = element.height || 100;
-                                    
-                                    const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-                                    bgRect.classList.add('sticky-bg');
-                                    bgRect.setAttribute('width', width);
-                                    bgRect.setAttribute('height', height);
-                                    bgRect.setAttribute('fill', data.noteColor || 'transparent');
-                                    bgRect.setAttribute('stroke', data.borderColor || 'transparent');
-                                    bgRect.setAttribute('fill-opacity', data.noteOpacity !== undefined ? data.noteOpacity : 1);
-                                    bgRect.setAttribute('stroke-width', '1');
-                                    gfx.prepend(bgRect);
-
-                                    // 2. ForeignObject for Rich Text
-                                    const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
-                                    fo.classList.add('sticky-fo');
-                                    fo.setAttribute('width', width);
-                                    fo.setAttribute('height', height);
-                                    fo.setAttribute('x', 0);
-                                    fo.setAttribute('y', 0);
-                                    
-                                    // Content Div
-                                    const div = document.createElement('div');
-                                    div.style.width = '100%';
-                                    div.style.height = '100%';
-                                    div.style.padding = '10px';
-                                    div.style.boxSizing = 'border-box';
-                                    div.style.overflow = 'hidden';
-                                    div.style.fontSize = `${data.textFontSize || 12}px`;
-                                    div.style.fontWeight = data.textBold ? 'bold' : 'normal';
-                                    div.style.color = data.textColor || '#000000';
-                                    div.style.fontFamily = 'Arial, sans-serif';
-                                    div.style.whiteSpace = 'pre-wrap';
-                                    div.style.wordBreak = 'break-word';
-                                    
-                                    // Use stored HTML content or fallback to plain text
-                                    div.innerHTML = data.htmlContent || (docs[0].text ? JSON.parse(docs[0].text).text : '') || '';
-                                    
-                                    fo.appendChild(div);
-                                    gfx.appendChild(fo);
-                                }
-
-                                // 1. Apply Sticky Note Styles (New: bpmn:Group)
-                                if (element.type === 'bpmn:Group') {
-                                    const text = gfx.querySelector('text');
-                                    const path = gfx.querySelector('path');
-                                    const rect = gfx.querySelector('rect');
-                                    
-                                    // Reset Visibility First
-                                    if (text) text.style.display = 'block';
-                                    if (path) path.style.display = 'block';
-                                    if (rect) rect.style.display = 'block';
-                                    
-                                    // Remove old sticky elements
-                                    const oldBg = gfx.querySelector('.sticky-bg');
-                                    if (oldBg) oldBg.remove();
-                                    const oldFo = gfx.querySelector('.sticky-fo');
-                                    if (oldFo) oldFo.remove();
-
-                                    // Always use Rich Text / Sticky Note Rendering if data exists
-                                    // Fix: Check for any sticky note property, not just color/html
-                                    if (data.noteColor || data.htmlContent || data.textFontSize || data.textColor) {
-                                        // Hide default elements
-                                        if (text) text.style.display = 'none';
-                                        if (path) path.style.display = 'none';
-                                        if (rect) rect.style.display = 'none';
-
-                                        // 1. Background Rect
-                                        const width = element.width || 300;
-                                        const height = element.height || 300;
-                                        
-                                        const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-                                        bgRect.classList.add('sticky-bg');
-                                        bgRect.setAttribute('width', width);
-                                        bgRect.setAttribute('height', height);
-                                        bgRect.setAttribute('rx', '4'); // Rounded corners
-                                        bgRect.setAttribute('ry', '4');
-                                        bgRect.setAttribute('fill', data.noteColor || '#fff9c4'); // Default yellow if missing
-                                        bgRect.setAttribute('stroke', data.borderColor || 'transparent');
-                                        bgRect.setAttribute('fill-opacity', data.noteOpacity !== undefined ? data.noteOpacity : 1);
-                                        bgRect.setAttribute('stroke-width', '1');
-                                        gfx.prepend(bgRect);
-
-                                        // 2. ForeignObject for Rich Text
-                                        const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
-                                        fo.classList.add('sticky-fo');
-                                        fo.setAttribute('width', width);
-                                        fo.setAttribute('height', height);
-                                        fo.setAttribute('x', 0);
-                                        fo.setAttribute('y', 0);
-                                        
-                                        // Content Div
-                                        const div = document.createElement('div');
-                                        div.style.width = '100%';
-                                        div.style.height = '100%';
-                                        div.style.padding = '10px';
-                                        div.style.boxSizing = 'border-box';
-                                        div.style.overflow = 'hidden';
-                                        div.style.fontSize = `${data.textFontSize || 12}px`;
-                                        div.style.fontWeight = data.textBold ? 'bold' : 'normal';
-                                        div.style.color = data.textColor || '#000000';
-                                        div.style.fontFamily = 'Arial, sans-serif';
-                                        div.style.whiteSpace = 'pre-wrap';
-                                        div.style.wordBreak = 'break-word';
-                                        
-                                        // Use stored HTML content or fallback to plain text
-                                        div.innerHTML = data.htmlContent || (docs[0].text ? JSON.parse(docs[0].text).text : '') || '';
-                                        
-                                        fo.appendChild(div);
-                                        gfx.appendChild(fo);
-                                    }
-                                }
-
-                                // 2. Apply Name Font Size (Operator Mode)
-                                if (data.nameFontSize) {
-                                    const label = gfx.querySelector('.djs-label');
-                                    if (label) {
-                                        label.style.fontSize = `${data.nameFontSize}px`;
-                                    }
-                                }
-                            } catch(e) {}
-                        }
-                    });
-                };
-
-                // Apply on load and potentially on updates if we were editing live (which we aren't in Operator)
-                // But we should run it once after import.
-                const eventBus = viewerRef.current.get('eventBus');
-                eventBus.on('import.done', applyStyles);
-                
-                // Also run immediately in case import is already done
-                applyStyles();
-
-                return () => {
-                    eventBus.off('import.done', applyStyles);
-                };
-            }, [process]); // Re-run when process loads
 
             // Always On PI Display Manager
             useEffect(() => {
@@ -2155,7 +2090,6 @@ HTML_TEMPLATE = """
                 const updateOverlays = async () => {
                     for (const el of alwaysOnElements) {
                         // Fix: Find overlay by checking if it contains our specific content ID
-                        // bpmn-js might not preserve custom 'type' property in the overlay object returned by get()
                         let overlay = overlays.get({ element: el.id }).find(o => o.html && o.html.querySelector(`#content-${el.id}`));
                         
                         // Fetch Data
@@ -2380,6 +2314,67 @@ HTML_TEMPLATE = """
                 }
             };
 
+            const handleExportCSV = (logsToExport) => {
+                if (!logsToExport || logsToExport.length === 0) return;
+
+                // CSV Header
+                let csvContent = "data:text/csv;charset=utf-8,\uFEFFTime,Source,Message,Value,Note\\n";
+                
+                logsToExport.forEach(log => {
+                    const row = [
+                        log.time,
+                        log.source,
+                        log.message,
+                        `"${log.value}"`, // Quote value to handle commas
+                        `"${log.note}"`
+                    ].join(",");
+                    csvContent += row + "\\n";
+                });
+
+                const now = new Date();
+                const timestamp = now.getFullYear() +
+                    String(now.getMonth() + 1).padStart(2, '0') +
+                    String(now.getDate()).padStart(2, '0') +
+                    String(now.getHours()).padStart(2, '0') +
+                    String(now.getMinutes()).padStart(2, '0');
+
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", `${process.name}_${timestamp}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const handleUpdateLog = async (index, newNote) => {
+                const newLogs = [...logs];
+                if (newLogs[index]) {
+                    newLogs[index].note = newNote;
+                    setLogs(newLogs);
+                    
+                    // Sync Update
+                    if (viewerRef.current) {
+                        viewerRef.current._customState = {
+                            runningTaskId: currentRunningTaskId,
+                            logs: newLogs
+                        };
+                    }
+                    
+                    // Save to Backend
+                    await fetch(`${API_BASE}/sessions`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            process_id: processId,
+                            current_task_id: currentRunningTaskId,
+                            logs: newLogs,
+                            is_finished: isFinished
+                        })
+                    });
+                }
+            };
+
             const handleStartTask = async () => {
                 if (!windowTask) return;
                 
@@ -2411,8 +2406,6 @@ HTML_TEMPLATE = """
                     const newLogs = [...logs, newLogStart];
                     setLogs(newLogs);
                     setCurrentRunningTaskId(null); 
-                    setLogs(newLogs);
-                    setCurrentRunningTaskId(null); 
                     setWindowTask(prev => ({ ...prev, status: 'completed' }));
                     
                     // Sync Update
@@ -2440,6 +2433,9 @@ HTML_TEMPLATE = """
                     });
                     
                     setShowWindow(false);
+                    
+                    // Auto Export CSV for Start Event
+                    // handleExportCSV(newLogs);
                     return;
                 }
 
@@ -2451,8 +2447,6 @@ HTML_TEMPLATE = """
                     note: note
                 };
                 const newLogs = [...logs, newLog];
-                setLogs(newLogs);
-                setCurrentRunningTaskId(windowTask.id);
                 setLogs(newLogs);
                 setCurrentRunningTaskId(windowTask.id);
                 setWindowTask(prev => ({ ...prev, status: 'running' }));
@@ -2503,8 +2497,6 @@ HTML_TEMPLATE = """
                 const newLogs = [...logs, newLog];
                 setLogs(newLogs);
                 setCurrentRunningTaskId(null); 
-                setLogs(newLogs);
-                setCurrentRunningTaskId(null); 
                 setWindowTask(prev => ({ ...prev, status: 'completed' }));
 
                 // Sync Update
@@ -2536,7 +2528,7 @@ HTML_TEMPLATE = """
             };
 
             const handleFinishProcess = async () => {
-                if (!confirm('確定要結束整個流程嗎？')) return;
+                if (!confirm('確定要結束整個流程並匯出紀錄嗎？')) return;
                 
                 const newLog = {
                     time: new Date().toLocaleTimeString(),
@@ -2561,58 +2553,35 @@ HTML_TEMPLATE = """
                 });
                 alert('流程已完成！');
                 setShowWindow(false); // Close the window
-                // Stay on page
-            };
-
-            const handleExportCSV = () => {
-                // CSV Header
-                let csvContent = "data:text/csv;charset=utf-8,\uFEFFTime,Source,Message,Value,Note\\n";
                 
-                logs.forEach(log => {
-                    const row = [
-                        log.time,
-                        log.source,
-                        log.message,
-                        `"${log.value}"`, // Quote value to handle commas
-                        `"${log.note}"`
-                    ].join(",");
-                    csvContent += row + "\\n";
-                });
-
-                const encodedUri = encodeURI(csvContent);
-                const link = document.createElement("a");
-                link.setAttribute("href", encodedUri);
-                link.setAttribute("download", `${process.name}_logs.csv`);
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
+                // Auto Export CSV
+                handleExportCSV(newLogs);
             };
 
             const headerActions = (
-                <div className="flex gap-2">
-                    {!isFinished ? (
+                <div className="flex gap-2 items-center">
+                    <button 
+                        onClick={() => handleExportCSV(logs)}
+                        className="bg-[#81c995] hover:bg-[#a8dab5] text-[#0f5132] px-4 py-1 rounded-full font-medium shadow-sm transition text-sm"
+                    >
+                        匯出 CSV
+                    </button>
+
+                    {!isFinished && (
                         <button 
                             onClick={handleFinishProcess}
-                            className="bg-[#f28b82] hover:bg-[#f6aea9] text-[#5c1e1e] px-3 py-1 rounded text-xs font-bold transition"
+                            className="bg-[#f28b82] hover:bg-[#f6aea9] text-[#5c1e1e] px-6 py-1 rounded-full font-medium shadow-sm transition text-sm"
                         >
                             結束流程
                         </button>
-                    ) : (
-                        <>
-                            <button 
-                                onClick={handleExportCSV}
-                                className="bg-[#81c995] hover:bg-[#a8dab5] text-[#0f5132] px-3 py-1 rounded text-xs font-bold transition"
-                            >
-                                匯出 CSV
-                            </button>
-                            <button 
-                                onClick={() => onNavigate('dashboard')}
-                                className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 px-3 py-1 rounded text-xs font-medium transition"
-                            >
-                                返回首頁
-                            </button>
-                        </>
                     )}
+                    
+                    <button 
+                        onClick={() => onNavigate('dashboard')}
+                        className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 px-4 py-1 rounded-full text-sm font-medium transition"
+                    >
+                        返回首頁
+                    </button>
                 </div>
             );
 
@@ -2620,7 +2589,7 @@ HTML_TEMPLATE = """
                 <div className="flex flex-col h-full relative">
                     {/* Top: Timeline (1/4) */}
                     <div className="h-1/4 min-h-[180px] flex flex-col bg-[#1e1e1e]">
-                        <TimelineViewer logs={logs} headerActions={headerActions} />
+                        <TimelineViewer logs={logs} headerActions={headerActions} onUpdateLog={handleUpdateLog} />
                     </div>
 
                     {/* Bottom: BPMN (3/4) */}
@@ -2648,7 +2617,7 @@ HTML_TEMPLATE = """
                                 loadingTag={loadingTag}
                             />
                         )}
-                    </div>
+                        </div>
                 </div>
             );
         };
@@ -2659,7 +2628,88 @@ HTML_TEMPLATE = """
             const [csvData, setCsvData] = useState([]);
             const viewerRef = useRef(null);
             const [processName, setProcessName] = useState('');
-            const [selectedLogIndex, setSelectedLogIndex] = useState(null);
+            const [isLoaded, setIsLoaded] = useState(false);
+
+            // Helper to apply styles (Sticky Notes) - Reused from Operator logic
+            const applyStyles = useCallback(() => {
+                if (!viewerRef.current) return;
+                const viewer = viewerRef.current;
+                const canvas = viewer.get('canvas');
+                const elementRegistry = viewer.get('elementRegistry');
+                const graphicsFactory = viewer.get('graphicsFactory');
+
+                const elements = elementRegistry.filter(e => e.type !== 'bpmn:Process');
+                
+                elements.forEach(element => {
+                    const gfx = elementRegistry.getGraphics(element);
+                    const businessObj = element.businessObject;
+                    const docs = businessObj.documentation;
+                    
+                    if (element.type === 'bpmn:Group' || element.type === 'bpmn:TextAnnotation') {
+                        try {
+                            let data = {};
+                            if (docs && docs.length > 0 && docs[0].text) {
+                                data = JSON.parse(docs[0].text);
+                            } else if (element.type === 'bpmn:Group') {
+                                data = { noteColor: '#fff2cc', borderColor: '#d6b656' };
+                            }
+
+                            if (data.noteColor || data.htmlContent || data.textFontSize || data.textColor) {
+                                // Sticky Note Logic (Simplified for Review - just render)
+                                const path = gfx.querySelector('.djs-visual path');
+                                if (path) path.style.display = 'none';
+                                
+                                const rect = gfx.querySelector('.djs-visual rect');
+                                if (rect) rect.style.display = 'none';
+
+                                let existing = gfx.querySelector('.sticky-bg');
+                                if (existing) existing.remove();
+                                let existingFo = gfx.querySelector('.sticky-fo');
+                                if (existingFo) existingFo.remove();
+
+                                const width = element.width;
+                                const height = element.height;
+
+                                const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                                bgRect.classList.add('sticky-bg');
+                                bgRect.setAttribute('width', width);
+                                bgRect.setAttribute('height', height);
+                                bgRect.setAttribute('fill', data.noteColor || 'transparent');
+                                bgRect.setAttribute('stroke', data.borderColor || 'transparent');
+                                bgRect.setAttribute('fill-opacity', data.noteOpacity !== undefined ? data.noteOpacity : 1);
+                                gfx.prepend(bgRect);
+
+                                const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
+                                fo.classList.add('sticky-fo');
+                                fo.setAttribute('width', width);
+                                fo.setAttribute('height', height);
+                                
+                                const div = document.createElement('div');
+                                div.style.width = '100%';
+                                div.style.height = '100%';
+                                div.style.padding = '10px';
+                                div.style.boxSizing = 'border-box';
+                                div.style.overflow = 'hidden';
+                                div.style.fontSize = `${data.textFontSize || 12}px`;
+                                div.style.fontWeight = data.textBold ? 'bold' : 'normal';
+                                div.style.color = data.textColor || '#000000';
+                                div.style.fontFamily = 'Arial, sans-serif';
+                                div.style.whiteSpace = 'pre-wrap';
+                                div.style.wordBreak = 'break-word';
+                                div.innerHTML = data.htmlContent || (docs && docs[0] && docs[0].text ? JSON.parse(docs[0].text).text : '') || '';
+                                
+                                fo.appendChild(div);
+                                gfx.appendChild(fo);
+                            }
+                            
+                            if (data.nameFontSize) {
+                                const label = gfx.querySelector('.djs-label');
+                                if (label) label.style.fontSize = `${data.nameFontSize}px`;
+                            }
+                        } catch(e) {}
+                    }
+                });
+            }, []);
 
             useEffect(() => {
                 if (!processId) return;
@@ -2682,193 +2732,61 @@ HTML_TEMPLATE = """
                         ];
                         events.forEach(event => eventBus.on(event, 10000, () => false));
 
-                        // Tooltip for Hyperlinks
-                        eventBus.on('element.hover', (e) => {
-                            const docs = e.element.businessObject.documentation;
-                            if (docs && docs.length > 0 && docs[0].text) {
-                                try {
-                                    const data = JSON.parse(docs[0].text);
-                                    if (data.targetUrl) {
-                                        viewer.get('overlays').add(e.element.id, 'url-tooltip', {
-                                            position: { top: -25, left: 0 },
-                                            html: `<div style="background: rgba(30,30,30,0.9); color: #8ab4f8; padding: 4px 8px; border-radius: 4px; font-size: 11px; border: 1px solid #8ab4f8; pointer-events: none; white-space: nowrap; z-index: 1000;">🔗 ${data.targetUrl}</div>`
-                                        });
-                                    }
-                                } catch(err) {}
-                            }
-                        });
+                        // Apply Sticky Note Styles
+                        setTimeout(applyStyles, 500);
 
-                        eventBus.on('element.out', (e) => {
-                            viewer.get('overlays').remove({ type: 'url-tooltip' });
-                        });
-
-                        // Apply Text Styles (Review Mode)
-                        const applyStyles = () => {
-                            const elementRegistry = viewer.get('elementRegistry');
-                            const canvas = viewer.get('canvas');
-                            
-                            elementRegistry.forEach(element => {
-                                const docs = element.businessObject.documentation;
-                                if (docs && docs.length > 0 && docs[0].text) {
-                                    try {
-                                        const data = JSON.parse(docs[0].text);
-                                        const gfx = canvas.getGraphics(element);
-                                        
-                                        // 1. Apply Sticky Note Styles (Legacy: bpmn:TextAnnotation)
-                                        if (element.type === 'bpmn:TextAnnotation') {
-                                            const text = gfx.querySelector('text');
-                                            const path = gfx.querySelector('path');
-                                            
-                                            // Reset Visibility First
-                                            if (text) text.style.display = 'block';
-                                            if (path) path.style.display = 'block';
-                                            
-                                            // Remove old sticky elements
-                                            const oldBg = gfx.querySelector('.sticky-bg');
-                                            if (oldBg) oldBg.remove();
-                                            const oldFo = gfx.querySelector('.sticky-fo');
-                                            if (oldFo) oldFo.remove();
-
-                                            // Always use Rich Text / Sticky Note Rendering
-                                            // Hide default elements
-                                            if (text) text.style.display = 'none';
-                                            if (path) path.style.display = 'none';
-
-                                            // 1. Background Rect
-                                            const width = element.width || 100;
-                                            const height = element.height || 100;
-                                            
-                                            const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-                                            bgRect.classList.add('sticky-bg');
-                                            bgRect.setAttribute('width', width);
-                                            bgRect.setAttribute('height', height);
-                                            bgRect.setAttribute('fill', data.noteColor || 'transparent');
-                                            bgRect.setAttribute('stroke', data.borderColor || 'transparent');
-                                            bgRect.setAttribute('fill-opacity', data.noteOpacity !== undefined ? data.noteOpacity : 1);
-                                            bgRect.setAttribute('stroke-width', '1');
-                                            gfx.prepend(bgRect);
-
-                                            // 2. ForeignObject for Rich Text
-                                            const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
-                                            fo.classList.add('sticky-fo');
-                                            fo.setAttribute('width', width);
-                                            fo.setAttribute('height', height);
-                                            fo.setAttribute('x', 0);
-                                            fo.setAttribute('y', 0);
-                                            
-                                            // Content Div
-                                            const div = document.createElement('div');
-                                            div.style.width = '100%';
-                                            div.style.height = '100%';
-                                            div.style.padding = '10px';
-                                            div.style.boxSizing = 'border-box';
-                                            div.style.overflow = 'hidden';
-                                            div.style.fontSize = `${data.textFontSize || 12}px`;
-                                            div.style.fontWeight = data.textBold ? 'bold' : 'normal';
-                                            div.style.color = data.textColor || '#000000';
-                                            div.style.fontFamily = 'Arial, sans-serif';
-                                            div.style.whiteSpace = 'pre-wrap';
-                                            div.style.wordBreak = 'break-word';
-                                            
-                                            // Use stored HTML content or fallback to plain text
-                                            div.innerHTML = data.htmlContent || (docs[0].text ? JSON.parse(docs[0].text).text : '') || '';
-                                            
-                                            fo.appendChild(div);
-                                            gfx.appendChild(fo);
-                                        }
-
-                                        // 1. Apply Sticky Note Styles (New: bpmn:Group)
-                                        if (element.type === 'bpmn:Group') {
-                                            const text = gfx.querySelector('text');
-                                            const path = gfx.querySelector('path');
-                                            const rect = gfx.querySelector('rect');
-                                            
-                                            // Reset Visibility First
-                                            if (text) text.style.display = 'block';
-                                            if (path) path.style.display = 'block';
-                                            if (rect) rect.style.display = 'block';
-                                            
-                                            // Remove old sticky elements
-                                            const oldBg = gfx.querySelector('.sticky-bg');
-                                            if (oldBg) oldBg.remove();
-                                            const oldFo = gfx.querySelector('.sticky-fo');
-                                            if (oldFo) oldFo.remove();
-
-                                            // Always use Rich Text / Sticky Note Rendering if data exists
-                                            if (data.noteColor || data.htmlContent) {
-                                                // Hide default elements
-                                                if (text) text.style.display = 'none';
-                                                if (path) path.style.display = 'none';
-                                                if (rect) rect.style.display = 'none';
-
-                                                // 1. Background Rect
-                                                const width = element.width || 300;
-                                                const height = element.height || 300;
-                                                
-                                                const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-                                                bgRect.classList.add('sticky-bg');
-                                                bgRect.setAttribute('width', width);
-                                                bgRect.setAttribute('height', height);
-                                                bgRect.setAttribute('fill', data.noteColor || 'transparent');
-                                                bgRect.setAttribute('stroke', data.borderColor || 'transparent');
-                                                bgRect.setAttribute('fill-opacity', data.noteOpacity !== undefined ? data.noteOpacity : 1);
-                                                bgRect.setAttribute('stroke-width', '1');
-                                                gfx.prepend(bgRect);
-
-                                                // 2. ForeignObject for Rich Text
-                                                const fo = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
-                                                fo.classList.add('sticky-fo');
-                                                fo.setAttribute('width', width);
-                                                fo.setAttribute('height', height);
-                                                fo.setAttribute('x', 0);
-                                                fo.setAttribute('y', 0);
-                                                
-                                                // Content Div
-                                                const div = document.createElement('div');
-                                                div.style.width = '100%';
-                                                div.style.height = '100%';
-                                                div.style.padding = '10px';
-                                                div.style.boxSizing = 'border-box';
-                                                div.style.overflow = 'hidden';
-                                                div.style.fontSize = `${data.textFontSize || 12}px`;
-                                                div.style.fontWeight = data.textBold ? 'bold' : 'normal';
-                                                div.style.color = data.textColor || '#000000';
-                                                div.style.fontFamily = 'Arial, sans-serif';
-                                                div.style.whiteSpace = 'pre-wrap';
-                                                div.style.wordBreak = 'break-word';
-                                                
-                                                // Use stored HTML content or fallback to plain text
-                                                div.innerHTML = data.htmlContent || (docs[0].text ? JSON.parse(docs[0].text).text : '') || '';
-                                                
-                                                fo.appendChild(div);
-                                                gfx.appendChild(fo);
-                                            }
-                                        }
-
-                                        // 2. Apply Name Font Size (Review Mode)
-                                        if (data.nameFontSize) {
-                                            const label = gfx.querySelector('.djs-label');
-                                            if (label) {
-                                                label.style.fontSize = `${data.nameFontSize}px`;
-                                            }
-                                        }
-                                    } catch(e) {}
-                                }
-                            });
-                        };
-                        applyStyles();
-                        
-                    } catch(err) {
-                        console.error(err);
-                        alert('流程載入失敗');
-                    }
+                    } catch(e) { console.error(e); }
                 };
                 load();
-                // Ensure clean load
-                return () => viewer.destroy();
-            }, [processId]);
+                
+                return () => { if(viewerRef.current) viewerRef.current.destroy(); };
+            }, [processId, applyStyles]);
 
-            // Robust CSV Parser
+            // Sync Visuals with Logs
+            useEffect(() => {
+                if (!viewerRef.current || csvData.length === 0) return;
+                const viewer = viewerRef.current;
+                const canvas = viewer.get('canvas');
+                const elementRegistry = viewer.get('elementRegistry');
+                const modeling = viewer.get('modeling'); // Viewer doesn't have modeling, use Overlays or Markers
+
+                // Reset all styles first if needed (optional)
+
+                // Track status of each task
+                const taskStatus = {}; // name -> 'running' | 'completed'
+
+                csvData.forEach(log => {
+                    if (log.message.includes('任務開始:')) {
+                        const name = log.message.split(': ')[1].trim();
+                        if (!taskStatus[name]) taskStatus[name] = 'running';
+                    } else if (log.message.includes('任務完成:')) {
+                        const name = log.message.split(': ')[1].trim();
+                        taskStatus[name] = 'completed';
+                    }
+                });
+
+                // Apply to Elements
+                elementRegistry.forEach(element => {
+                    const name = element.businessObject.name;
+                    if (name && taskStatus[name]) {
+                        const status = taskStatus[name];
+                        if (status === 'completed') {
+                            canvas.addMarker(element.id, 'completed'); // Use CSS class for gray fill
+                            // Or use direct SVG manipulation if CSS isn't enough for fill
+                            const gfx = elementRegistry.getGraphics(element);
+                            const visual = gfx.querySelector('.djs-visual rect, .djs-visual circle, .djs-visual polygon');
+                            if (visual) {
+                                visual.style.fill = '#f0f0f0';
+                                visual.style.stroke = '#999';
+                            }
+                        } else if (status === 'running') {
+                            canvas.addMarker(element.id, 'highlight'); // Use existing highlight class
+                        }
+                    }
+                });
+
+            }, [csvData]);
+
             const parseCSVLine = (text) => {
                 const result = [];
                 let start = 0;
@@ -2895,6 +2813,7 @@ HTML_TEMPLATE = """
 
             const handleFileUpload = (e) => {
                 const file = e.target.files[0];
+                if (!file) return;
                 const reader = new FileReader();
                 reader.onload = (evt) => {
                     const text = evt.target.result;
@@ -2903,7 +2822,6 @@ HTML_TEMPLATE = """
                         if (!line.trim()) return null;
                         const cols = parseCSVLine(line);
                         if (cols.length < 4) return null;
-                        // Format: Time, Source, Message, Value, Note
                         return { 
                             time: cols[0], 
                             source: cols[1], 
@@ -2913,134 +2831,54 @@ HTML_TEMPLATE = """
                         };
                     }).filter(x => x && x.time);
                     setCsvData(data);
+                    setIsLoaded(true);
                 };
                 reader.readAsText(file);
             };
 
-            const handleLogClick = (row, index) => {
-                setSelectedLogIndex(index);
-                if (!viewerRef.current) return;
-
-                const canvas = viewerRef.current.get('canvas');
-                const elementRegistry = viewerRef.current.get('elementRegistry');
-                const overlays = viewerRef.current.get('overlays');
-
-                // Clear previous
-                overlays.clear();
-                elementRegistry.forEach(e => canvas.removeMarker(e.id, 'highlight'));
-
-                // Extract Task Name from Message
-                // Patterns: "開始任務: Name", "完成任務: Name", "跳過任務: Name"
-                let taskName = row.message;
-                if (taskName.includes(': ')) {
-                    taskName = taskName.split(': ')[1].trim();
-                }
-
-                // Find Element by Name
-                const element = elementRegistry.filter(e => e.businessObject.name === taskName)[0];
-                
-                if (element) {
-                    // Highlight
-                    canvas.addMarker(element.id, 'highlight');
-                    
-                    // Show Overlay if Value exists and is not '-'
-                    if (row.value && row.value !== '-' && row.value !== '"-"') {
-                        // Value format: "Tag1=10.00 Unit, Tag2=20.00 Unit"
-                        // Split by comma but respect if there are other commas (though formatValue doesn't produce commas inside value usually)
-                        // The formatValue output is: `${d.tag}=${val}` joined by ', '
-                        // We can split by ', ' safely enough for now
-                        const parts = row.value.split(', ');
-                        const htmlContent = parts.map(p => `<div>${p}</div>`).join('');
-                        
-                        overlays.add(element.id, {
-                            position: { bottom: 10, right: 10 },
-                            html: `<div style="background: #81c995; color: #0f5132; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2); text-align: right; line-height: 1.2;">${htmlContent}</div>`
-                        });
-                        
-                        // Center view
-                        // canvas.scrollToElement(element); // Optional: might be too jumpy
-                    }
-                }
-            };
-
-            // Keyboard Navigation
-            useEffect(() => {
-                const handleKeyDown = (e) => {
-                    if (csvData.length === 0) return;
-                    
-                    if (e.key === 'ArrowDown') {
-                        e.preventDefault();
-                        setSelectedLogIndex(prev => {
-                            const next = prev === null ? 0 : Math.min(prev + 1, csvData.length - 1);
-                            handleLogClick(csvData[next], next);
-                            return next;
-                        });
-                    } else if (e.key === 'ArrowUp') {
-                        e.preventDefault();
-                        setSelectedLogIndex(prev => {
-                            const next = prev === null ? 0 : Math.max(prev - 1, 0);
-                            handleLogClick(csvData[next], next);
-                            return next;
-                        });
-                    }
-                };
-                
-                window.addEventListener('keydown', handleKeyDown);
-                return () => window.removeEventListener('keydown', handleKeyDown);
-            }, [csvData]); // Re-bind when data changes
+            const headerActions = (
+                <div className="flex gap-2 items-center">
+                    <button 
+                        onClick={() => onNavigate('dashboard')}
+                        className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 px-4 py-1 rounded-full text-sm font-medium transition"
+                    >
+                        返回首頁
+                    </button>
+                </div>
+            );
 
             return (
-                <div className="flex h-full flex-col bg-[#121212]">
-                    <div className="bg-[#1e1e1e] px-6 py-3 flex justify-between items-center border-b border-white/5">
-                        <div className="flex items-center gap-4">
-                            <button onClick={() => onNavigate('dashboard')} className="text-white/60 hover:text-white transition flex items-center gap-1">
-                                <span className="text-lg">←</span> 返回
-                            </button>
-                            <h2 className="text-xl font-medium text-white/90">{processName} <span className="text-white/40 text-sm ml-2">(歷史回顧)</span></h2>
-                        </div>
-                        <div className="flex gap-4">
-                            <label className="cursor-pointer bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-4 py-2 rounded-full font-medium transition shadow-sm">
-                                匯入 Log (CSV)
-                                <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
-                            </label>
-                        </div>
+                <div className="flex flex-col h-full relative">
+                    {/* Top: Timeline (1/4) */}
+                    <div className="h-1/4 min-h-[180px] flex flex-col bg-[#1e1e1e]">
+                        <TimelineViewer logs={csvData} headerActions={headerActions} />
                     </div>
-                    <div className="flex-1 flex overflow-hidden">
-                        <div className="flex-1 bg-white relative review-mode" ref={containerRef}>
-                            {!processId && <div className="absolute inset-0 flex items-center justify-center text-slate-400">錯誤：未指定流程 ID</div>}
-                        </div>
-                        <div className="w-96 bg-[#1e1e1e] border-l border-white/5 overflow-y-auto p-6">
-                            <h3 className="font-medium text-white/90 mb-4 text-lg">操作紀錄</h3>
-                            {csvData.length === 0 ? <p className="text-white/40 text-center py-10">請上傳 CSV 檔案以檢視紀錄</p> : (
-                                <div className="space-y-3">
-                                    {csvData.map((row, i) => (
-                                        <div 
-                                            key={i} 
-                                            onClick={() => handleLogClick(row, i)}
-                                            className={`text-sm p-3 rounded-xl border transition cursor-pointer group ${selectedLogIndex === i ? 'bg-[#2d2d2d] border-[#8ab4f8] ring-1 ring-[#8ab4f8]' : 'bg-[#2d2d2d] border-white/5 hover:border-white/20'}`}
-                                        >
-                                            <div className="flex justify-between items-center mb-1">
-                                                <span className="text-white/40 text-xs">{row.time}</span>
-                                                <span className="text-[#8ab4f8] text-xs font-bold">{row.source}</span>
-                                            </div>
-                                            <div className="text-white/80 group-hover:text-white">{row.message}</div>
-                                            
-                                            {/* Value Display: Hide if '-' */}
-                                            {row.value && row.value !== '-' && row.value !== '"-"' && (
-                                                <div className="mt-2 text-[#81c995] text-xs bg-[#81c995]/10 inline-block px-2 py-1 rounded w-full">
-                                                    {row.value.split(', ').map((v, idx) => (
-                                                        <div key={idx}>{v}</div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                            
-                                            {row.note && row.note !== '""' && !(row.note === 'End Value' && (row.value === '-' || row.value === '"-"')) && (
-                                                <div className="text-[#fdd663] text-xs mt-2 bg-[#fdd663]/10 p-2 rounded border border-[#fdd663]/20">Note: {row.note}</div>
-                                            )}
-                                        </div>
-                                    ))}
+
+                    {/* Bottom: BPMN (3/4) */}
+                    <div className="flex-1 relative bg-white border-t-4 border-[#1e1e1e]">
+                        <div ref={containerRef} className="w-full h-full operator-mode"></div>
+                        
+                        {/* Import Overlay */}
+                        {!isLoaded && (
+                            <div className="absolute inset-0 bg-black/80 z-50 flex flex-col items-center justify-center">
+                                <div className="bg-[#1e1e1e] p-8 rounded-2xl border border-white/10 text-center max-w-md">
+                                    <div className="text-4xl mb-4">📂</div>
+                                    <h3 className="text-xl font-bold text-white mb-2">匯入回顧資料</h3>
+                                    <p className="text-white/60 mb-6 text-sm">請選擇先前匯出的 CSV 檔案以進行回顧。</p>
+                                    
+                                    <label className="bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-6 py-2 rounded-full font-bold cursor-pointer transition inline-flex items-center gap-2">
+                                        <span>選擇檔案</span>
+                                        <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
+                                    </label>
                                 </div>
-                            )}
+                            </div>
+                        )}
+
+                        {/* Zoom Controls */}
+                        <div className="absolute bottom-4 right-4 flex flex-col gap-2 z-10">
+                            <button onClick={() => viewerRef.current.get('canvas').zoom(viewerRef.current.get('canvas').zoom() + 0.2)} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] font-bold text-xl">+</button>
+                            <button onClick={() => viewerRef.current.get('canvas').zoom(viewerRef.current.get('canvas').zoom() - 0.2)} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] font-bold text-xl">-</button>
+                            <button onClick={() => viewerRef.current.get('canvas').zoom('fit-viewport')} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] text-xs">Fit</button>
                         </div>
                     </div>
                 </div>
