@@ -86,6 +86,10 @@ def init_db():
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
+
 @app.route('/api/processes', methods=['GET'])
 def get_processes():
     conn = sqlite3.connect(DB_FILE)
@@ -212,9 +216,43 @@ def get_settings():
     row = c.fetchone()
     conn.close()
     return jsonify({'pi_server_ip': row[0] if row else ''})
+@app.route('/api/settings', methods=['POST'])
+def save_settings():
+    data = request.json
+    ip = data.get('pi_server_ip')
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('pi_server_ip', ?)", (ip,))
     conn.commit()
     conn.close()
     return jsonify({'result': 'success'})
+
+@app.route('/api/heartbeat', methods=['POST'])
+def heartbeat():
+    data = request.json
+    process_id = data.get('process_id')
+    user_id = data.get('user_id')
+    
+    if not process_id or not user_id:
+        return jsonify({'error': 'Missing params'}), 400
+        
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    
+    # Upsert heartbeat
+    c.execute("INSERT OR REPLACE INTO active_users (process_id, user_id, last_heartbeat) VALUES (?, ?, CURRENT_TIMESTAMP)", (process_id, user_id))
+    
+    # Remove old heartbeats (> 30 seconds)
+    c.execute("DELETE FROM active_users WHERE last_heartbeat < datetime('now', '-30 seconds')")
+    
+    # Count online users for this process
+    c.execute("SELECT COUNT(DISTINCT user_id) FROM active_users WHERE process_id=?", (process_id,))
+    count = c.fetchone()[0]
+    
+    conn.commit()
+    conn.close()
+    
+    return jsonify({'online_count': count})
 
 @app.route('/api/pi_status', methods=['GET'])
 def get_pi_status():
