@@ -3121,12 +3121,13 @@ class IISMiddleware:
         return self.app(environ, start_response)
 
 # Apply Middleware
+# Apply Middleware
 app.wsgi_app = IISMiddleware(app.wsgi_app)
 
+# Initialize Database (Must run on import for IIS)
+init_db()
+
 if __name__ == '__main__':
-    # Initialize Database
-    init_db()
-    
     # Ensure static folder exists
     if not os.path.exists('static'):
         print("WARNING: 'static' folder not found. Please run download_assets.ps1 first.")
