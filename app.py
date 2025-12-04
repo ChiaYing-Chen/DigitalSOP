@@ -66,6 +66,16 @@ def init_db():
             value TEXT
         )
     ''')
+
+    # Create active_users table for heartbeat
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS active_users (
+            process_id INTEGER,
+            user_id TEXT,
+            last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (process_id, user_id)
+        )
+    ''')
     
     conn.commit()
     conn.close()
@@ -95,11 +105,11 @@ def get_processes():
 def get_process(process_id):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT id, name, xml_content FROM processes WHERE id=?", (process_id,))
+    c.execute("SELECT id, name, xml_content, updated_at FROM processes WHERE id=?", (process_id,))
     row = c.fetchone()
     conn.close()
     if row:
-        return jsonify({'id': row[0], 'name': row[1], 'xml_content': row[2]})
+        return jsonify({'id': row[0], 'name': row[1], 'xml_content': row[2], 'updated_at': row[3]})
     return jsonify({'error': 'Not found'}), 404
 
 @app.route('/api/processes', methods=['POST'])
@@ -202,22 +212,6 @@ def get_settings():
     row = c.fetchone()
     conn.close()
     return jsonify({'pi_server_ip': row[0] if row else ''})
-
-@app.route('/api/settings', methods=['POST'])
-def save_settings():
-    data = request.json
-    ip = data.get('pi_server_ip')
-    
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    
-    # Check if key exists, insert or update
-    c.execute("SELECT 1 FROM settings WHERE key='pi_server_ip'")
-    if c.fetchone():
-        c.execute("UPDATE settings SET value=? WHERE key='pi_server_ip'", (ip,))
-    else:
-        c.execute("INSERT INTO settings (key, value) VALUES ('pi_server_ip', ?)", (ip,))
-        
     conn.commit()
     conn.close()
     return jsonify({'result': 'success'})
@@ -2252,6 +2246,82 @@ HTML_TEMPLATE = """
                 return () => container.removeEventListener('wheel', onWheel, { capture: true });
             }, []);
 
+            // Real-time Synchronization (Polling)
+            useEffect(() => {
+                if (!processId) return;
+                
+                const syncSession = async () => {
+                    try {
+                        const res = await fetch(`${API_BASE}/sessions/${processId}`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            if (data) {
+                                // Sync Logs
+                                if (JSON.stringify(data.logs) !== JSON.stringify(logs)) {
+                                    setLogs(data.logs);
+                                    
+                                    // Sync Visuals
+                                    if (viewerRef.current) {
+                                        viewerRef.current._customState = {
+                                            runningTaskId: data.current_task_id,
+                                            logs: data.logs
+                                        };
+                                        
+                                        // Re-apply markers
+                                        const canvas = viewerRef.current.get('canvas');
+                                        const elementRegistry = viewerRef.current.get('elementRegistry');
+                                        
+                                        // Clear all markers first (inefficient but safe)
+                                        elementRegistry.forEach(el => {
+                                            canvas.removeMarker(el.id, 'highlight');
+                                            canvas.removeMarker(el.id, 'completed-task');
+                                        });
+
+                                        // Re-calculate status based on logs
+                                        const taskStatus = {};
+                                        data.logs.forEach(log => {
+                                            if (log.message.includes('任務開始:')) {
+                                                const name = log.message.split(': ')[1].trim();
+                                                taskStatus[name] = 'running';
+                                            } else if (log.message.includes('任務完成:')) {
+                                                const name = log.message.split(': ')[1].trim();
+                                                taskStatus[name] = 'completed';
+                                            }
+                                        });
+
+                                        elementRegistry.forEach(el => {
+                                            const name = el.businessObject.name;
+                                            if (name && taskStatus[name]) {
+                                                if (taskStatus[name] === 'completed') {
+                                                    canvas.addMarker(el.id, 'completed-task');
+                                                } else if (taskStatus[name] === 'running') {
+                                                    canvas.addMarker(el.id, 'highlight');
+                                                }
+                                            }
+                                        });
+                                    }
+                                }
+                                
+                                // Sync Finished State
+                                if (data.is_finished !== isFinished) {
+                                    setIsFinished(data.is_finished);
+                                }
+
+                                // Sync Current Running Task (Optional, mainly for visual focus)
+                                if (data.current_task_id !== currentRunningTaskId) {
+                                    setCurrentRunningTaskId(data.current_task_id);
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Sync error:", e);
+                    }
+                };
+
+                const interval = setInterval(syncSession, 7000); // Poll every 7 seconds
+                return () => clearInterval(interval);
+            }, [processId, logs, isFinished, currentRunningTaskId]);
+
             // Helper to open window
             const openTaskWindow = (element, currentLogs, activeTaskId) => {
                 const businessObj = element.businessObject;
@@ -2317,8 +2387,14 @@ HTML_TEMPLATE = """
             const handleExportCSV = (logsToExport) => {
                 if (!logsToExport || logsToExport.length === 0) return;
 
-                // CSV Header
-                let csvContent = "data:text/csv;charset=utf-8,\uFEFFTime,Source,Message,Value,Note\\n";
+                // Build CSV String
+                let csvString = "";
+                
+                // Add Metadata Line
+                if (process && process.id && process.updated_at) {
+                    csvString += `# Metadata: id=${process.id}, version=${process.updated_at}\\n`;
+                }
+                csvString += "Time,Source,Message,Value,Note\\n";
                 
                 logsToExport.forEach(log => {
                     const row = [
@@ -2328,7 +2404,7 @@ HTML_TEMPLATE = """
                         `"${log.value}"`, // Quote value to handle commas
                         `"${log.note}"`
                     ].join(",");
-                    csvContent += row + "\\n";
+                    csvString += row + "\\n";
                 });
 
                 const now = new Date();
@@ -2338,13 +2414,17 @@ HTML_TEMPLATE = """
                     String(now.getHours()).padStart(2, '0') +
                     String(now.getMinutes()).padStart(2, '0');
 
-                const encodedUri = encodeURI(csvContent);
+                // Use Blob for correct encoding (BOM + UTF-8)
+                const blob = new Blob(["\uFEFF" + csvString], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                
                 const link = document.createElement("a");
-                link.setAttribute("href", encodedUri);
+                link.setAttribute("href", url);
                 link.setAttribute("download", `${process.name}_${timestamp}.csv`);
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
+                URL.revokeObjectURL(url);
             };
 
             const handleUpdateLog = async (index, newNote) => {
@@ -2558,8 +2638,44 @@ HTML_TEMPLATE = """
                 handleExportCSV(newLogs);
             };
 
+            const [onlineCount, setOnlineCount] = useState(1);
+            const userId = useMemo(() => 'user_' + Math.random().toString(36).substr(2, 9), []);
+
+            // Heartbeat for Online Count
+            useEffect(() => {
+                if (!processId) return;
+
+                const sendHeartbeat = async () => {
+                    try {
+                        const res = await fetch(`${API_BASE}/heartbeat`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ process_id: processId, user_id: userId })
+                        });
+                        if (res.ok) {
+                            const data = await res.json();
+                            setOnlineCount(data.online_count);
+                        }
+                    } catch (e) {
+                        console.error("Heartbeat error:", e);
+                    }
+                };
+
+                sendHeartbeat(); // Initial call
+                const interval = setInterval(sendHeartbeat, 5000); // Every 5 seconds
+                return () => clearInterval(interval);
+            }, [processId, userId]);
+
             const headerActions = (
                 <div className="flex gap-2 items-center">
+                    <div className="bg-[#2d2d2d] px-3 py-1 rounded-full flex items-center gap-2 border border-white/10 mr-2" title="在線人數">
+                        <span className="relative flex h-2 w-2">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                        </span>
+                        <span className="text-white/80 text-xs font-medium">{onlineCount} 人在線</span>
+                    </div>
+
                     <button 
                         onClick={() => handleExportCSV(logs)}
                         className="bg-[#81c995] hover:bg-[#a8dab5] text-[#0f5132] px-4 py-1 rounded-full font-medium shadow-sm transition text-sm"
@@ -2711,6 +2827,8 @@ HTML_TEMPLATE = """
                 });
             }, []);
 
+            const [currentProcess, setCurrentProcess] = useState(null);
+
             useEffect(() => {
                 if (!processId) return;
                 const viewer = new BpmnJS({ container: containerRef.current });
@@ -2721,6 +2839,7 @@ HTML_TEMPLATE = """
                         const res = await fetch(`${API_BASE}/processes/${processId}`);
                         const data = await res.json();
                         setProcessName(data.name);
+                        setCurrentProcess(data); // Store full process info for version check
                         await viewer.importXML(data.xml_content);
                         viewer.get('canvas').zoom('fit-viewport');
                         
@@ -2817,8 +2936,33 @@ HTML_TEMPLATE = """
                 const reader = new FileReader();
                 reader.onload = (evt) => {
                     const text = evt.target.result;
-                    const lines = text.split('\\n').slice(1); // Skip header
-                    const data = lines.map(line => {
+                    const lines = text.split('\\n');
+                    
+                    let startIndex = 1; // Default skip header
+                    
+                    // Check Metadata
+                    if (lines[0].startsWith('# Metadata:')) {
+                        startIndex = 2; // Skip metadata + header
+                        const metaParts = lines[0].substring(11).split(',');
+                        let csvId = null;
+                        let csvVersion = null;
+                        
+                        metaParts.forEach(part => {
+                            const [key, val] = part.split('=').map(s => s.trim());
+                            if (key === 'id') csvId = parseInt(val);
+                            if (key === 'version') csvVersion = val;
+                        });
+
+                        if (currentProcess) {
+                            if (csvId !== currentProcess.id) {
+                                alert(`警告：此紀錄檔屬於不同的流程專案 (ID: ${csvId})，與目前專案 (ID: ${currentProcess.id}) 不符！`);
+                            } else if (csvVersion !== currentProcess.updated_at) {
+                                alert(`警告：此紀錄檔的版本 (${csvVersion}) 與目前流程版本 (${currentProcess.updated_at}) 不同，可能會導致顯示錯誤！`);
+                            }
+                        }
+                    }
+
+                    const data = lines.slice(startIndex).map(line => {
                         if (!line.trim()) return null;
                         const cols = parseCSVLine(line);
                         if (cols.length < 4) return null;
