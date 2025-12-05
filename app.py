@@ -2284,6 +2284,43 @@ HTML_TEMPLATE = """
                 return () => container.removeEventListener('wheel', onWheel, { capture: true });
             }, []);
 
+            // Reactive Visual Sync (BPMN Markers)
+            useEffect(() => {
+                if (!viewerRef.current) return;
+                const canvas = viewerRef.current.get('canvas');
+                const elementRegistry = viewerRef.current.get('elementRegistry');
+                
+                // Clear all markers
+                elementRegistry.forEach(el => {
+                    canvas.removeMarker(el.id, 'highlight');
+                    canvas.removeMarker(el.id, 'completed-task');
+                });
+
+                // Calculate status from logs
+                const taskStatus = {};
+                logs.forEach(log => {
+                    if (log.message.includes('任務開始:')) {
+                        const name = log.message.split(': ')[1].trim();
+                        taskStatus[name] = 'running';
+                    } else if (log.message.includes('任務完成:')) {
+                        const name = log.message.split(': ')[1].trim();
+                        taskStatus[name] = 'completed';
+                    }
+                });
+
+                // Apply markers
+                elementRegistry.forEach(el => {
+                    const name = el.businessObject.name;
+                    if (name && taskStatus[name]) {
+                        if (taskStatus[name] === 'completed') {
+                            canvas.addMarker(el.id, 'completed-task');
+                        } else if (taskStatus[name] === 'running') {
+                            canvas.addMarker(el.id, 'highlight');
+                        }
+                    }
+                });
+            }, [logs]);
+
             // Real-time Synchronization (Polling)
             useEffect(() => {
                 if (!processId) return;
@@ -2297,47 +2334,6 @@ HTML_TEMPLATE = """
                                 // Sync Logs
                                 if (JSON.stringify(data.logs) !== JSON.stringify(logs)) {
                                     setLogs(data.logs);
-                                    
-                                    // Sync Visuals
-                                    if (viewerRef.current) {
-                                        viewerRef.current._customState = {
-                                            runningTaskId: data.current_task_id,
-                                            logs: data.logs
-                                        };
-                                        
-                                        // Re-apply markers
-                                        const canvas = viewerRef.current.get('canvas');
-                                        const elementRegistry = viewerRef.current.get('elementRegistry');
-                                        
-                                        // Clear all markers first (inefficient but safe)
-                                        elementRegistry.forEach(el => {
-                                            canvas.removeMarker(el.id, 'highlight');
-                                            canvas.removeMarker(el.id, 'completed-task');
-                                        });
-
-                                        // Re-calculate status based on logs
-                                        const taskStatus = {};
-                                        data.logs.forEach(log => {
-                                            if (log.message.includes('任務開始:')) {
-                                                const name = log.message.split(': ')[1].trim();
-                                                taskStatus[name] = 'running';
-                                            } else if (log.message.includes('任務完成:')) {
-                                                const name = log.message.split(': ')[1].trim();
-                                                taskStatus[name] = 'completed';
-                                            }
-                                        });
-
-                                        elementRegistry.forEach(el => {
-                                            const name = el.businessObject.name;
-                                            if (name && taskStatus[name]) {
-                                                if (taskStatus[name] === 'completed') {
-                                                    canvas.addMarker(el.id, 'completed-task');
-                                                } else if (taskStatus[name] === 'running') {
-                                                    canvas.addMarker(el.id, 'highlight');
-                                                }
-                                            }
-                                        });
-                                    }
                                 }
                                 
                                 // Sync Finished State
@@ -2345,7 +2341,7 @@ HTML_TEMPLATE = """
                                     setIsFinished(data.is_finished);
                                 }
 
-                                // Sync Current Running Task (Optional, mainly for visual focus)
+                                // Sync Current Running Task
                                 if (data.current_task_id !== currentRunningTaskId) {
                                     setCurrentRunningTaskId(data.current_task_id);
                                 }
@@ -2569,17 +2565,13 @@ HTML_TEMPLATE = """
                 setCurrentRunningTaskId(windowTask.id);
                 setWindowTask(prev => ({ ...prev, status: 'running' }));
 
-                // Sync Update
+                // Sync Update (Optional, for other components relying on _customState)
                 if (viewerRef.current) {
                     viewerRef.current._customState = {
                         runningTaskId: windowTask.id,
                         logs: newLogs
                     };
                 }
-
-                // Update Visuals
-                const canvas = viewerRef.current.get('canvas');
-                canvas.addMarker(windowTask.id, 'highlight');
 
                 // Save to Backend
                 await fetch(`${API_BASE}/sessions`, {
@@ -2624,11 +2616,6 @@ HTML_TEMPLATE = """
                         logs: newLogs
                     };
                 }
-
-                // Update Visuals
-                const canvas = viewerRef.current.get('canvas');
-                canvas.removeMarker(windowTask.id, 'highlight');
-                canvas.addMarker(windowTask.id, 'completed-task');
 
                 // Save
                 await fetch(`${API_BASE}/sessions`, {
