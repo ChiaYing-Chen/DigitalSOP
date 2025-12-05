@@ -1995,6 +1995,9 @@ HTML_TEMPLATE = """
                     });
 
                     eventBus.on('element.click', (e) => {
+                        // Block interaction if process is finished
+                        if (viewer._customState && viewer._customState.isFinished) return;
+
                         const element = e.element;
                         
                         // Handle Hyperlinks (DataObjectReference)
@@ -2284,9 +2287,17 @@ HTML_TEMPLATE = """
                 return () => container.removeEventListener('wheel', onWheel, { capture: true });
             }, []);
 
-            // Reactive Visual Sync (BPMN Markers)
+            // Reactive Visual Sync (BPMN Markers & State)
             useEffect(() => {
                 if (!viewerRef.current) return;
+                
+                // Update State for Listeners (Avoid Stale Closures)
+                viewerRef.current._customState = {
+                    runningTaskId: currentRunningTaskId,
+                    logs: logs,
+                    isFinished: isFinished
+                };
+
                 const canvas = viewerRef.current.get('canvas');
                 const elementRegistry = viewerRef.current.get('elementRegistry');
                 
@@ -2297,29 +2308,56 @@ HTML_TEMPLATE = """
                 });
 
                 // Calculate status from logs
-                const taskStatus = {};
+                const taskStatusByName = {};
+                const taskStatusByID = {};
+
                 logs.forEach(log => {
-                    if (log.message.includes('任務開始:')) {
-                        const name = log.message.split(': ')[1].trim();
-                        taskStatus[name] = 'running';
-                    } else if (log.message.includes('任務完成:')) {
-                        const name = log.message.split(': ')[1].trim();
-                        taskStatus[name] = 'completed';
+                    let status = null;
+                    let name = null;
+
+                    if (log.message.startsWith('任務開始:')) {
+                        status = 'running';
+                        name = log.message.substring(5).trim(); // Remove '任務開始:'
+                    } else if (log.message.startsWith('任務完成:')) {
+                        status = 'completed';
+                        name = log.message.substring(5).trim(); // Remove '任務完成:'
+                    }
+
+                    if (status) {
+                        if (log.taskId) {
+                            taskStatusByID[log.taskId] = status;
+                        }
+                        if (name) {
+                            taskStatusByName[name] = status;
+                        }
                     }
                 });
 
                 // Apply markers
                 elementRegistry.forEach(el => {
+                    const id = el.id;
                     const name = el.businessObject.name;
-                    if (name && taskStatus[name]) {
-                        if (taskStatus[name] === 'completed') {
-                            canvas.addMarker(el.id, 'completed-task');
-                        } else if (taskStatus[name] === 'running') {
-                            canvas.addMarker(el.id, 'highlight');
+                    
+                    let status = null;
+
+                    // Priority 1: Match by ID (New robust method)
+                    if (taskStatusByID[id]) {
+                        status = taskStatusByID[id];
+                    } 
+                    // Priority 2: Match by Name (Fallback for old logs)
+                    else if (name && taskStatusByName[name]) {
+                        status = taskStatusByName[name];
+                    }
+
+                    if (status) {
+                        if (status === 'completed') {
+                            canvas.addMarker(id, 'completed-task');
+                        } else if (status === 'running') {
+                            canvas.addMarker(id, 'highlight');
                         }
                     }
                 });
-            }, [logs]);
+            }, [logs, isFinished, currentRunningTaskId]);
 
             // Real-time Synchronization (Polling)
             useEffect(() => {
@@ -2352,7 +2390,7 @@ HTML_TEMPLATE = """
                     }
                 };
 
-                const interval = setInterval(syncSession, 7000); // Poll every 7 seconds
+                const interval = setInterval(syncSession, 3000); // Poll every 3 seconds
                 return () => clearInterval(interval);
             }, [processId, logs, isFinished, currentRunningTaskId]);
 
@@ -2558,7 +2596,8 @@ HTML_TEMPLATE = """
                     source: 'User',
                     message: `任務開始: ${windowTask.name}`,
                     value: startValStr,
-                    note: note
+                    note: note,
+                    taskId: windowTask.id // Track Task ID for robust matching
                 };
                 const newLogs = [...logs, newLog];
                 setLogs(newLogs);
@@ -2602,7 +2641,8 @@ HTML_TEMPLATE = """
                     source: 'User',
                     message: `任務完成: ${windowTask.name}`,
                     value: valStr,
-                    note: note
+                    note: note,
+                    taskId: windowTask.id // Track Task ID for robust matching
                 };
                 const newLogs = [...logs, newLog];
                 setLogs(newLogs);
