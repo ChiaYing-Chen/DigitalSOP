@@ -33,7 +33,7 @@ except Exception as e:
 
 # --- Database Setup ---
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     c = conn.cursor()
     
     # Create processes table
@@ -86,13 +86,22 @@ def init_db():
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+@app.errorhandler(500)
+def internal_error(error):
+    import traceback
+    return jsonify({
+        'error': 'Internal Server Error',
+        'message': str(error),
+        'traceback': traceback.format_exc()
+    }), 500
+
 @app.route('/favicon.ico')
 def favicon():
     return '', 204
 
 @app.route('/api/processes', methods=['GET'])
 def get_processes():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     c = conn.cursor()
     c.execute("""
         SELECT p.id, p.name, p.updated_at, s.is_finished 
@@ -107,7 +116,7 @@ def get_processes():
 
 @app.route('/api/processes/<int:process_id>', methods=['GET'])
 def get_process(process_id):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     c = conn.cursor()
     c.execute("SELECT id, name, xml_content, updated_at FROM processes WHERE id=?", (process_id,))
     row = c.fetchone()
@@ -123,7 +132,7 @@ def save_process():
     xml_content = data.get('xml_content')
     
     
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     c = conn.cursor()
     process_id = data.get('id')
     
@@ -151,7 +160,7 @@ def save_process():
 
 @app.route('/api/processes/<int:process_id>', methods=['DELETE'])
 def delete_process(process_id):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     conn.execute('DELETE FROM processes WHERE id = ?', (process_id,))
     conn.execute('DELETE FROM sessions WHERE process_id = ?', (process_id,))
     conn.commit()
@@ -161,7 +170,7 @@ def delete_process(process_id):
 @app.route('/api/sessions/<int:process_id>', methods=['GET'])
 def get_session(process_id):
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = sqlite3.connect(DB_FILE, timeout=30)
         c = conn.cursor()
         # Get the latest session
         c.execute("SELECT current_task_id, logs, is_finished FROM sessions WHERE process_id=? ORDER BY updated_at DESC LIMIT 1", (process_id,))
@@ -190,7 +199,7 @@ def save_session():
     logs = json.dumps(data.get('logs', []))
     is_finished = data.get('is_finished', False)
     
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     c = conn.cursor()
     
     # Check if session exists
@@ -210,7 +219,7 @@ def save_session():
 
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     c = conn.cursor()
     c.execute("SELECT value FROM settings WHERE key='pi_server_ip'")
     row = c.fetchone()
@@ -220,7 +229,7 @@ def get_settings():
 def save_settings():
     data = request.json
     ip = data.get('pi_server_ip')
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     c = conn.cursor()
     c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('pi_server_ip', ?)", (ip,))
     conn.commit()
@@ -236,7 +245,7 @@ def heartbeat():
     if not process_id or not user_id:
         return jsonify({'error': 'Missing params'}), 400
         
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     c = conn.cursor()
     
     # Upsert heartbeat
@@ -256,7 +265,7 @@ def heartbeat():
 
 @app.route('/api/pi_status', methods=['GET'])
 def get_pi_status():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     c = conn.cursor()
     c.execute("SELECT value FROM settings WHERE key='pi_server_ip'")
     row = c.fetchone()
@@ -3190,7 +3199,11 @@ class IISMiddleware:
 app.wsgi_app = IISMiddleware(app.wsgi_app)
 
 # Initialize Database (Must run on import for IIS)
-init_db()
+# Initialize Database (Must run on import for IIS)
+try:
+    init_db()
+except Exception as e:
+    print(f"Database initialization failed: {e}")
 
 if __name__ == '__main__':
     # Ensure static folder exists
