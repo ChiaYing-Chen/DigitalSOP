@@ -1462,7 +1462,7 @@ HTML_TEMPLATE = """
                             {hasUnsavedChanges && <span className="text-[#f28b82] text-xs font-medium animate-pulse">● 未儲存</span>}
                         </div>
                         <div className="flex gap-3 items-center">
-                            <button onClick={() => window.open('http://10.122.51.60/MDserve/article/DigitalSOP/BPMN.md', '_blank')} className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 w-8 h-8 rounded-full font-bold transition flex items-center justify-center text-sm" title="BPMN 說明">?</button>
+                            <button onClick={() => window.open('http://10.122.51.60/MDserve/article/DigitalSOP/AboutBMPN.md', '_blank')} className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 w-8 h-8 rounded-full font-bold transition flex items-center justify-center text-sm" title="BPMN 說明">?</button>
                             <button onClick={handleSave} className="bg-[#8ab4f8] hover:bg-[#aecbfa] text-[#002d6f] px-6 py-1 rounded-full font-medium shadow-sm transition text-sm">儲存流程</button>
                             <button onClick={() => setIsPanelOpen(!isPanelOpen)} className={`bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 w-8 h-8 rounded-full transition flex items-center justify-center ${!isPanelOpen ? 'text-[#8ab4f8]' : ''}`} title={isPanelOpen ? '收起面板' : '展開面板'}>
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
