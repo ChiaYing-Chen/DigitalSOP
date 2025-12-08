@@ -1838,7 +1838,9 @@ HTML_TEMPLATE = """
                                         </div>
                                     )}
                                 </div>
-                            ) : <p className="text-white/40 text-sm">請選擇流程圖中的元件以編輯屬性</p>}
+                            ) : (
+                                <p className="text-white/40 text-sm">請選擇流程圖中的元件以編輯屬性</p>
+                            )}
                         </div>
                     </div>
                 </div>
