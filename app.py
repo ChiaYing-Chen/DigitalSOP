@@ -39,6 +39,8 @@ except Exception as e:
 def get_db():
     conn = sqlite3.connect(DB_FILE, timeout=30)
     try:
+        # Enable Write-Ahead Logging for better concurrency
+        conn.execute('PRAGMA journal_mode=WAL;')
         yield conn
     finally:
         conn.close()
@@ -313,17 +315,31 @@ def get_tag_value():
     tags = [t.strip() for t in tag_param.split(';') if t.strip()]
     results = []
     
-    for tag_name in tags:
-        if PI_AVAILABLE:
-            try:
-                with PI.PIServer() as server:
-                    point = server.search(tag_name)[0]
-                    value = point.current_value
-                    results.append({'tag': tag_name, 'value': value, 'timestamp': datetime.datetime.now().isoformat(), 'source': 'PI Server'})
-            except Exception as e:
-                results.append({'tag': tag_name, 'value': 'Error', 'timestamp': datetime.datetime.now().isoformat(), 'source': 'PI Server (Error)'})
-        else:
-            results.append({'tag': tag_name, 'value': 'Offline', 'timestamp': datetime.datetime.now().isoformat(), 'source': 'System'})
+    if PI_AVAILABLE:
+        try:
+             # Optimization: Connect ONCE, then loop through tags
+             with PI.PIServer() as server:
+                 for tag_name in tags:
+                     try:
+                         # Use server.search to find point, then get value
+                         # Note: Optimally we would use PIServers return multiple points, but PIconnect usage here is simple
+                         # Assuming server.search returns a list of PIPoint
+                         points = server.search(tag_name)
+                         if points:
+                             point = points[0]
+                             value = point.current_value
+                             results.append({'tag': tag_name, 'value': value, 'timestamp': datetime.datetime.now().isoformat(), 'source': 'PI Server'})
+                         else:
+                             results.append({'tag': tag_name, 'value': 'Not Found', 'timestamp': datetime.datetime.now().isoformat(), 'source': 'PI Server'})
+                     except Exception as tag_err:
+                         results.append({'tag': tag_name, 'value': 'Error', 'timestamp': datetime.datetime.now().isoformat(), 'source': 'PI Server (Error)'})
+        except Exception as conn_err:
+             # If server connection fails entirely
+             for tag_name in tags:
+                 results.append({'tag': tag_name, 'value': 'Connection Error', 'timestamp': datetime.datetime.now().isoformat(), 'source': 'PI Server (Offline)'})
+    else:
+        for tag_name in tags:
+             results.append({'tag': tag_name, 'value': 'Offline', 'timestamp': datetime.datetime.now().isoformat(), 'source': 'System'})
             
     return jsonify(results)
 
