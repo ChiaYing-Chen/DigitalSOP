@@ -116,17 +116,22 @@ def favicon():
 @app.route('/api/processes', methods=['GET'])
 @app.route('/api/processes', methods=['GET'])
 def get_processes():
-    with get_db() as conn:
-        c = conn.cursor()
-        c.execute("""
-            SELECT p.id, p.name, p.updated_at, s.is_finished 
-            FROM processes p 
-            LEFT JOIN sessions s ON p.id = s.process_id 
-            ORDER BY p.updated_at DESC
-        """)
-        rows = c.fetchall()
-    # is_finished: None (no session), 0 (running), 1 (finished)
-    return jsonify([{'id': r[0], 'name': r[1], 'updated_at': r[2], 'session_status': r[3]} for r in rows])
+    try:
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("""
+                SELECT p.id, p.name, p.updated_at, s.is_finished 
+                FROM processes p 
+                LEFT JOIN sessions s ON p.id = s.process_id 
+                ORDER BY p.updated_at DESC
+            """)
+            rows = c.fetchall()
+        # is_finished: None (no session), 0 (running), 1 (finished)
+        return jsonify([{'id': r[0], 'name': r[1], 'updated_at': r[2], 'session_status': r[3]} for r in rows])
+    except Exception as e:
+        import traceback
+        print(f"API Error: {e}")
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 @app.route('/api/processes/<int:process_id>', methods=['GET'])
 @app.route('/api/processes/<int:process_id>', methods=['GET'])
