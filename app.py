@@ -280,17 +280,17 @@ def heartbeat():
 @app.route('/api/pi_status', methods=['GET'])
 @app.route('/api/pi_status', methods=['GET'])
 def get_pi_status():
-    with get_db() as conn:
-        c = conn.cursor()
-        c.execute("SELECT value FROM settings WHERE key='pi_server_ip'")
-        row = c.fetchone()
-    
-    ip = row[0] if row else ''
-    if not ip:
-        return jsonify({'status': 'Not Configured'})
-        
-    # Ping Check
     try:
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT value FROM settings WHERE key='pi_server_ip'")
+            row = c.fetchone()
+        
+        ip = row[0] if row else ''
+        if not ip:
+            return jsonify({'status': 'Not Configured'})
+            
+        # Ping Check
         # -n 1 for Windows, -c 1 for Linux/Mac
         param = '-n' if platform.system().lower() == 'windows' else '-c'
         command = ['ping', param, '1', ip]
@@ -307,8 +307,9 @@ def get_pi_status():
         else:
             return jsonify({'status': 'Offline'})
     except Exception as e:
-        print(f"Ping failed: {e}")
-        return jsonify({'status': 'Offline'})
+        import traceback
+        print(f"PI Status Error: {e}")
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 @app.route('/api/get_tag_value')
 def get_tag_value():
