@@ -94,7 +94,11 @@ def init_db():
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    try:
+        return render_template_string(HTML_TEMPLATE)
+    except Exception as e:
+        import traceback
+        return f"<h1>Internal Server Error (Captured)</h1><pre>{traceback.format_exc()}</pre>", 500
 
 @app.errorhandler(500)
 def internal_error(error):
