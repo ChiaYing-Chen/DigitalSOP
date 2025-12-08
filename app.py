@@ -9,6 +9,7 @@ import subprocess
 import platform
 from flask import Flask, render_template_string, request, jsonify, send_from_directory
 from flask_cors import CORS
+from contextlib import contextmanager
 
 # --- Configuration ---
 app = Flask(__name__, static_folder='static')
@@ -31,54 +32,63 @@ except Exception as e:
     PI_AVAILABLE = False
     print(f"PIconnect initialization failed: {e}. PI Server Offline.")
 
-# --- Database Setup ---
-def init_db():
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    c = conn.cursor()
-    
-    # Create processes table
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS processes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            xml_content TEXT NOT NULL,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Create sessions table
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            process_id INTEGER,
-            current_task_id TEXT,
-            logs TEXT,
-            is_finished BOOLEAN DEFAULT 0,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(process_id) REFERENCES processes(id)
-        )
-    ''')
-    
-    # Create settings table
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    ''')
+    print(f"PIconnect initialization failed: {e}. PI Server Offline.")
 
-    # Create active_users table for heartbeat
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS active_users (
-            process_id INTEGER,
-            user_id TEXT,
-            last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (process_id, user_id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+# --- Database Setup ---
+@contextmanager
+def get_db():
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def init_db():
+    with get_db() as conn:
+        c = conn.cursor()
+        
+        # Create processes table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS processes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                xml_content TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create sessions table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_id INTEGER,
+                current_task_id TEXT,
+                logs TEXT,
+                is_finished BOOLEAN DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(process_id) REFERENCES processes(id)
+            )
+        ''')
+        
+        # Create settings table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
+
+        # Create active_users table for heartbeat
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS active_users (
+                process_id INTEGER,
+                user_id TEXT,
+                last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (process_id, user_id)
+            )
+        ''')
+        
+        conn.commit()
 
 # --- Routes ---
 
@@ -100,27 +110,27 @@ def favicon():
     return '', 204
 
 @app.route('/api/processes', methods=['GET'])
+@app.route('/api/processes', methods=['GET'])
 def get_processes():
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    c = conn.cursor()
-    c.execute("""
-        SELECT p.id, p.name, p.updated_at, s.is_finished 
-        FROM processes p 
-        LEFT JOIN sessions s ON p.id = s.process_id 
-        ORDER BY p.updated_at DESC
-    """)
-    rows = c.fetchall()
-    conn.close()
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT p.id, p.name, p.updated_at, s.is_finished 
+            FROM processes p 
+            LEFT JOIN sessions s ON p.id = s.process_id 
+            ORDER BY p.updated_at DESC
+        """)
+        rows = c.fetchall()
     # is_finished: None (no session), 0 (running), 1 (finished)
     return jsonify([{'id': r[0], 'name': r[1], 'updated_at': r[2], 'session_status': r[3]} for r in rows])
 
 @app.route('/api/processes/<int:process_id>', methods=['GET'])
+@app.route('/api/processes/<int:process_id>', methods=['GET'])
 def get_process(process_id):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    c = conn.cursor()
-    c.execute("SELECT id, name, xml_content, updated_at FROM processes WHERE id=?", (process_id,))
-    row = c.fetchone()
-    conn.close()
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, name, xml_content, updated_at FROM processes WHERE id=?", (process_id,))
+        row = c.fetchone()
     if row:
         return jsonify({'id': row[0], 'name': row[1], 'xml_content': row[2], 'updated_at': row[3]})
     return jsonify({'error': 'Not found'}), 404
@@ -132,50 +142,47 @@ def save_process():
     xml_content = data.get('xml_content')
     
     
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    c = conn.cursor()
-    process_id = data.get('id')
-    
-    
-    if process_id:
-        if name and xml_content:
-             c.execute("UPDATE processes SET name=?, xml_content=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (name, xml_content, process_id))
-        elif name:
-             c.execute("UPDATE processes SET name=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (name, process_id))
-        elif xml_content:
-             c.execute("UPDATE processes SET xml_content=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (xml_content, process_id))
-        else:
-             conn.close()
-             return jsonify({'error': 'Nothing to update'}), 400
-    else:
-        if not name or not xml_content:
-            conn.close()
-            return jsonify({'error': 'Missing name or xml_content'}), 400
-        c.execute("INSERT INTO processes (name, xml_content) VALUES (?, ?)", (name, xml_content))
-        process_id = c.lastrowid
+    with get_db() as conn:
+        c = conn.cursor()
+        process_id = data.get('id')
         
-    conn.commit()
-    conn.close()
+        if process_id:
+            if name and xml_content:
+                 c.execute("UPDATE processes SET name=?, xml_content=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (name, xml_content, process_id))
+            elif name:
+                 c.execute("UPDATE processes SET name=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (name, process_id))
+            elif xml_content:
+                 c.execute("UPDATE processes SET xml_content=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (xml_content, process_id))
+            else:
+                 return jsonify({'error': 'Nothing to update'}), 400
+        else:
+            if not name or not xml_content:
+                return jsonify({'error': 'Missing name or xml_content'}), 400
+            c.execute("INSERT INTO processes (name, xml_content) VALUES (?, ?)", (name, xml_content))
+            process_id = c.lastrowid
+            
+        conn.commit()
     return jsonify({'id': process_id, 'message': 'Saved successfully'})
 
 @app.route('/api/processes/<int:process_id>', methods=['DELETE'])
+@app.route('/api/processes/<int:process_id>', methods=['DELETE'])
 def delete_process(process_id):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    conn.execute('DELETE FROM processes WHERE id = ?', (process_id,))
-    conn.execute('DELETE FROM sessions WHERE process_id = ?', (process_id,))
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        conn.execute('DELETE FROM processes WHERE id = ?', (process_id,))
+        conn.execute('DELETE FROM sessions WHERE process_id = ?', (process_id,))
+        conn.commit()
     return jsonify({'result': 'success'})
 
 @app.route('/api/sessions/<int:process_id>', methods=['GET'])
+@app.route('/api/sessions/<int:process_id>', methods=['GET'])
 def get_session(process_id):
     try:
-        conn = sqlite3.connect(DB_FILE, timeout=30)
-        c = conn.cursor()
-        # Get the latest session
-        c.execute("SELECT current_task_id, logs, is_finished FROM sessions WHERE process_id=? ORDER BY updated_at DESC LIMIT 1", (process_id,))
-        row = c.fetchone()
-        conn.close()
+        with get_db() as conn:
+            c = conn.cursor()
+            # Get the latest session
+            c.execute("SELECT current_task_id, logs, is_finished FROM sessions WHERE process_id=? ORDER BY updated_at DESC LIMIT 1", (process_id,))
+            row = c.fetchone()
+        
         if row:
             logs_data = []
             try:
@@ -199,41 +206,40 @@ def save_session():
     logs = json.dumps(data.get('logs', []))
     is_finished = data.get('is_finished', False)
     
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    c = conn.cursor()
-    
-    # Check if session exists
-    c.execute("SELECT process_id FROM sessions WHERE process_id=?", (process_id,))
-    row = c.fetchone()
-    
-    if row:
-        c.execute("UPDATE sessions SET current_task_id=?, logs=?, is_finished=?, updated_at=CURRENT_TIMESTAMP WHERE process_id=?",
-                  (current_task_id, logs, is_finished, process_id))
-    else:
-        c.execute("INSERT INTO sessions (process_id, current_task_id, logs, is_finished, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                  (process_id, current_task_id, logs, is_finished))
-                  
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        c = conn.cursor()
+        
+        # Check if session exists
+        c.execute("SELECT process_id FROM sessions WHERE process_id=?", (process_id,))
+        row = c.fetchone()
+        
+        if row:
+            c.execute("UPDATE sessions SET current_task_id=?, logs=?, is_finished=?, updated_at=CURRENT_TIMESTAMP WHERE process_id=?",
+                      (current_task_id, logs, is_finished, process_id))
+        else:
+            c.execute("INSERT INTO sessions (process_id, current_task_id, logs, is_finished, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                      (process_id, current_task_id, logs, is_finished))
+                      
+        conn.commit()
     return jsonify({'result': 'success'})
 
 @app.route('/api/settings', methods=['GET'])
+@app.route('/api/settings', methods=['GET'])
 def get_settings():
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    c = conn.cursor()
-    c.execute("SELECT value FROM settings WHERE key='pi_server_ip'")
-    row = c.fetchone()
-    conn.close()
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT value FROM settings WHERE key='pi_server_ip'")
+        row = c.fetchone()
     return jsonify({'pi_server_ip': row[0] if row else ''})
+@app.route('/api/settings', methods=['POST'])
 @app.route('/api/settings', methods=['POST'])
 def save_settings():
     data = request.json
     ip = data.get('pi_server_ip')
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('pi_server_ip', ?)", (ip,))
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('pi_server_ip', ?)", (ip,))
+        conn.commit()
     return jsonify({'result': 'success'})
 
 @app.route('/api/heartbeat', methods=['POST'])
@@ -245,31 +251,30 @@ def heartbeat():
     if not process_id or not user_id:
         return jsonify({'error': 'Missing params'}), 400
         
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    c = conn.cursor()
-    
-    # Upsert heartbeat
-    c.execute("INSERT OR REPLACE INTO active_users (process_id, user_id, last_heartbeat) VALUES (?, ?, CURRENT_TIMESTAMP)", (process_id, user_id))
-    
-    # Remove old heartbeats (> 30 seconds)
-    c.execute("DELETE FROM active_users WHERE last_heartbeat < datetime('now', '-30 seconds')")
-    
-    # Count online users for this process
-    c.execute("SELECT COUNT(DISTINCT user_id) FROM active_users WHERE process_id=?", (process_id,))
-    count = c.fetchone()[0]
-    
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        c = conn.cursor()
+        
+        # Upsert heartbeat
+        c.execute("INSERT OR REPLACE INTO active_users (process_id, user_id, last_heartbeat) VALUES (?, ?, CURRENT_TIMESTAMP)", (process_id, user_id))
+        
+        # Remove old heartbeats (> 30 seconds)
+        c.execute("DELETE FROM active_users WHERE last_heartbeat < datetime('now', '-30 seconds')")
+        
+        # Count online users for this process
+        c.execute("SELECT COUNT(DISTINCT user_id) FROM active_users WHERE process_id=?", (process_id,))
+        count = c.fetchone()[0]
+        
+        conn.commit()
     
     return jsonify({'online_count': count})
 
 @app.route('/api/pi_status', methods=['GET'])
+@app.route('/api/pi_status', methods=['GET'])
 def get_pi_status():
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    c = conn.cursor()
-    c.execute("SELECT value FROM settings WHERE key='pi_server_ip'")
-    row = c.fetchone()
-    conn.close()
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT value FROM settings WHERE key='pi_server_ip'")
+        row = c.fetchone()
     
     ip = row[0] if row else ''
     if not ip:
@@ -601,6 +606,30 @@ HTML_TEMPLATE = """
 
         // --- New Components ---
 
+        // Time Helpers
+        const getCurrentTime = () => {
+            const now = new Date();
+            const yyyy = now.getFullYear();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const dd = String(now.getDate()).padStart(2, '0');
+            const HH = String(now.getHours()).padStart(2, '0');
+            const MM = String(now.getMinutes()).padStart(2, '0');
+            const SS = String(now.getSeconds()).padStart(2, '0');
+            return `${yyyy}/${mm}/${dd} ${HH}:${MM}:${SS}`;
+        };
+
+        const formatTimelineTime = (fullTime) => {
+            if (!fullTime) return '';
+            const parts = fullTime.split(' ');
+            if (parts.length === 2) {
+                const dateParts = parts[0].split('/');
+                if (dateParts.length === 3) {
+                    return `${dateParts[1]}/${dateParts[2]} ${parts[1]}`;
+                }
+            }
+            return fullTime;
+        };
+
         // Timeline Viewer
         const TimelineViewer = ({ logs, headerActions, onUpdateLog }) => {
             const scrollRef = useRef(null);
@@ -648,7 +677,7 @@ HTML_TEMPLATE = """
                                     {idx + 1}
                                 </div>
                                 
-                                <div className="text-xs text-white/50 mt-1">{log.time}</div>
+                                <div className="text-xs text-white/50 mt-1">{formatTimelineTime(log.time)}</div>
                                 <div className="text-sm font-medium text-white/90 mt-1 text-center px-2">{log.message.split(': ')[1] || log.message}</div>
                                 
                                 {/* Indicators Container */}
@@ -1001,6 +1030,10 @@ HTML_TEMPLATE = """
             const [isFinalEnd, setIsFinalEnd] = useState(false);
             const [isPanelOpen, setIsPanelOpen] = useState(true); // 1. Collapsible Panel State
             const isComposing = useRef(false); // Track IME composition state
+            
+            // Resize State
+            const [elementWidth, setElementWidth] = useState('');
+            const [elementHeight, setElementHeight] = useState('');
 
             const GOOGLE_COLORS = [
                 '#EA4335', '#E91E63', '#9C27B0', '#673AB7', '#3F51B5', '#4285F4', '#03A9F4', 
@@ -1008,9 +1041,29 @@ HTML_TEMPLATE = """
             ];
 
             useEffect(() => {
-                const modeler = new BpmnJS({ container: containerRef.current, keyboard: { bindTo: document } });
+                const modeler = new BpmnJS({ 
+                    container: containerRef.current, 
+                    keyboard: { bindTo: document }
+                });
                 modelerRef.current = modeler;
                 makePaletteDraggable(containerRef.current);
+
+                // Force Enable Resizing via Runtime Interception
+                try {
+                    const eventBus = modeler.get('eventBus');
+                    console.log("EventBus retrieved, registering resize interceptor...");
+                    
+                    // Priority 9999 to override everything
+                    eventBus.on('rule.call', 9999, function(e) {
+                        if (e.rule === 'elements.resize' || e.rule === 'shape.resize') {
+                            // console.log("Resize rule intercepted for:", e.context); // Uncomment for verbose debug
+                            return true; // Force allow
+                        }
+                    });
+                    console.log("Resize interceptor registered.");
+                } catch (e) {
+                    console.error("Failed to register resize interceptor:", e);
+                }
 
                 const loadDiagram = async () => {
                     let xml = '';
@@ -1075,6 +1128,8 @@ HTML_TEMPLATE = """
                         setIsPanelOpen(true); // Auto-open panel
                         const element = selection[0];
                         setSelectedElement(element);
+                        setElementWidth(element.width);
+                        setElementHeight(element.height);
                         setElementName(element.businessObject.name || '');
                         const docs = element.businessObject.documentation;
                         if (docs && docs.length > 0 && docs[0].text) {
@@ -1226,35 +1281,6 @@ HTML_TEMPLATE = """
                 
                 // 3. Pool/Lane Resizing (Disabled to prevent unwanted resizing)
                 /*
-                else if (element.type === 'bpmn:Participant' || element.type === 'bpmn:Lane') {
-                    // Text is vertical, so Text Width -> Element Height
-                    const requiredHeight = textWidth + 60;
-                    if (requiredHeight > element.height) {
-                        newHeight = requiredHeight;
-                        shouldResize = true;
-                    }
-                }
-                */
-
-                if (shouldResize) {
-                    modeling.resizeShape(element, {
-                        x: element.x,
-                        y: element.y,
-                        width: newWidth,
-                        height: newHeight
-                    });
-                }
-            };
-
-            const updateElementName = (val) => {
-                setElementName(val);
-                if (selectedElement && modelerRef.current) { 
-                    const modeling = modelerRef.current.get('modeling');
-                    modeling.updateLabel(selectedElement, val); 
-                    autoResizeElement(selectedElement, val, nameFontSize, modeling);
-                }
-            };
-
             const updateElementProperties = (updates) => {
                 const newData = {
                     piTag: updates.piTag !== undefined ? updates.piTag : piTag,
@@ -1354,7 +1380,6 @@ HTML_TEMPLATE = """
                 }
             };
 
-            // Apply Text Styles to SVG
             useEffect(() => {
                 if (!modelerRef.current) return;
                 
@@ -1507,6 +1532,37 @@ HTML_TEMPLATE = """
                                                         <option key={s} value={s}>{s}px</option>
                                                     ))}
                                                 </select>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Size Control for Tasks */}
+                                    {(selectedElement.type.includes('Task') || selectedElement.type === 'bpmn:Participant') && (
+                                        <div className="mb-5 border-t border-white/10 pt-4">
+                                            <label className="block text-xs font-medium text-[#8ab4f8] mb-2 uppercase tracking-wider">尺寸 (Size)</label>
+                                            <div className="flex gap-2">
+                                                <div className="flex-1">
+                                                    <span className="text-white/60 text-xs block mb-1">寬度 (Width)</span>
+                                                    <input 
+                                                        type="number" 
+                                                        value={elementWidth} 
+                                                        onChange={(e) => setElementWidth(e.target.value)}
+                                                        onBlur={applyResize}
+                                                        onKeyDown={(e) => e.key === 'Enter' && applyResize()}
+                                                        className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-2 py-1 text-white outline-none text-sm"
+                                                    />
+                                                </div>
+                                                <div className="flex-1">
+                                                    <span className="text-white/60 text-xs block mb-1">高度 (Height)</span>
+                                                    <input 
+                                                        type="number" 
+                                                        value={elementHeight} 
+                                                        onChange={(e) => setElementHeight(e.target.value)}
+                                                        onBlur={applyResize}
+                                                        onKeyDown={(e) => e.key === 'Enter' && applyResize()}
+                                                        className="w-full bg-[#2d2d2d] border border-white/10 focus:border-[#8ab4f8] rounded-lg px-2 py-1 text-white outline-none text-sm"
+                                                    />
+                                                </div>
                                             </div>
                                         </div>
                                     )}
@@ -2556,7 +2612,7 @@ HTML_TEMPLATE = """
                 // Special handling for Start Event: Atomic Start (No Complete Log)
                 if (windowTask.type === 'bpmn:StartEvent') {
                      const newLogStart = {
-                        time: new Date().toLocaleTimeString(),
+                        time: getCurrentTime(),
                         source: 'User',
                         message: `任務開始: ${windowTask.name}`,
                         value: startValStr,
@@ -2601,7 +2657,7 @@ HTML_TEMPLATE = """
                 }
 
                 const newLog = {
-                    time: new Date().toLocaleTimeString(),
+                    time: getCurrentTime(),
                     source: 'User',
                     message: `任務開始: ${windowTask.name}`,
                     value: startValStr,
@@ -2646,7 +2702,7 @@ HTML_TEMPLATE = """
                 }).join(', ') || '-';
 
                 const newLog = {
-                    time: new Date().toLocaleTimeString(),
+                    time: getCurrentTime(),
                     source: 'User',
                     message: `任務完成: ${windowTask.name}`,
                     value: valStr,
@@ -2685,7 +2741,7 @@ HTML_TEMPLATE = """
                 if (!confirm('確定要結束整個流程並匯出紀錄嗎？')) return;
                 
                 const newLog = {
-                    time: new Date().toLocaleTimeString(),
+                    time: getCurrentTime(),
                     source: 'System',
                     message: '流程結束',
                     value: '-',
