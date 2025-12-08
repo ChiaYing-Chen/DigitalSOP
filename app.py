@@ -281,31 +281,24 @@ def heartbeat():
 @app.route('/api/pi_status', methods=['GET'])
 def get_pi_status():
     try:
-        with get_db() as conn:
-            c = conn.cursor()
-            c.execute("SELECT value FROM settings WHERE key='pi_server_ip'")
-            row = c.fetchone()
-        
-        ip = row[0] if row else ''
-        if not ip:
-            return jsonify({'status': 'Not Configured'})
-            
-        # Ping Check
-        # -n 1 for Windows, -c 1 for Linux/Mac
-        param = '-n' if platform.system().lower() == 'windows' else '-c'
-        command = ['ping', param, '1', ip]
-        
-        # Run ping command
-        # creationflags=0x08000000 is CREATE_NO_WINDOW to hide console window on Windows
-        if platform.system().lower() == 'windows':
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000)
-        else:
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        if result.returncode == 0:
-            return jsonify({'status': 'Connected'})
-        else:
-            return jsonify({'status': 'Offline'})
+        # Check if PIconnect is installed and available
+        if not PI_AVAILABLE:
+            return jsonify({'status': 'Offline', 'message': 'PI SDK Access Failed (ImportError)'})
+
+        # Use PIconnect to verify connection
+        try:
+             # Try to connect to default server or specific server if needed
+             # Since PIconnect uses AF SDK, simpliest check is to access PIServer list or default one
+             server_name = None
+             with PI.PIServer() as server:
+                 server_name = server.server_name
+                 # Optional: Try to read a test point if needed, but connection open is usually enough
+             
+             return jsonify({'status': 'Connected', 'server': server_name})
+        except Exception as pi_err:
+             print(f"PI Connect Error: {pi_err}")
+             return jsonify({'status': 'Offline', 'message': str(pi_err)})
+
     except Exception as e:
         import traceback
         print(f"PI Status Error: {e}")
