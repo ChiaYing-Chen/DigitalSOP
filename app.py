@@ -1278,9 +1278,7 @@ HTML_TEMPLATE = """
                         shouldResize = true;
                     }
                 }
-                
-                // 3. Pool/Lane Resizing (Disabled to prevent unwanted resizing)
-                /*
+            };
             const updateElementProperties = (updates) => {
                 const newData = {
                     piTag: updates.piTag !== undefined ? updates.piTag : piTag,
