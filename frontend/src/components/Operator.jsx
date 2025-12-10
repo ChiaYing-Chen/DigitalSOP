@@ -18,6 +18,8 @@ const Operator = ({ processId, onNavigate }) => {
     const [note, setNote] = useState('');
     const [tagValues, setTagValues] = useState([]);
     const [loadingTag, setLoadingTag] = useState(false);
+    const [piConnecting, setPiConnecting] = useState(false);
+    const [piStatus, setPiStatus] = useState('Checking...'); // PI Status for Operator
     const [onlineCount, setOnlineCount] = useState(1);
     const userId = useMemo(() => 'user_' + Math.random().toString(36).substr(2, 9), []);
 
@@ -34,6 +36,13 @@ const Operator = ({ processId, onNavigate }) => {
 
     useEffect(() => { logsRef.current = logs; }, [logs]);
     useEffect(() => { runningTaskRef.current = currentRunningTaskId; }, [currentRunningTaskId]);
+
+    // Check PI Status on Mount
+    useEffect(() => {
+        fetch(`${API_BASE}/pi_status`)
+            .then(res => res.json())
+            .then(data => setPiStatus(data.status));
+    }, []);
 
     // Check Predecessors
     const checkPredecessors = (element, currentLogs) => {
@@ -320,9 +329,12 @@ const Operator = ({ processId, onNavigate }) => {
                         // Fetch Data
                         let data = [];
                         try {
+                            if (!viewer._hasConnectedPI) setPiConnecting(true); // Start loading
                             const res = await fetch(`${API_BASE}/get_tag_value?tag=${encodeURIComponent(el.tag)}`);
                             data = await res.json();
+                            viewer._hasConnectedPI = true; // Mark as connected
                         } catch (e) { console.error(e); }
+                        finally { setPiConnecting(false); } // Stop loading
 
                         if (!overlay) {
                             // Create Overlay Container
@@ -970,31 +982,67 @@ const Operator = ({ processId, onNavigate }) => {
     );
 
     return (
-        <div className="flex flex-col h-full relative">
-            {/* Top: Timeline (1/4) */}
-            <div className="h-1/4 min-h-[180px] flex flex-col bg-[#1e1e1e]">
-                <TimelineViewer logs={logs} headerActions={headerActions} onUpdateLog={handleUpdateLog} />
+        <div className="flex flex-col h-full bg-[#1e1e1e]">
+            {/* 1. Timeline (Fixed Height) */}
+            <div className="h-1/3 min-h-[250px] border-b border-white/10 relative z-10 shrink-0">
+                <TimelineViewer
+                    logs={logs}
+                    totalSteps={process ? (process.xml_content.match(/<bpmn:task/g) || []).length : 0}
+                    currentStep={logs.length}
+                    activeProcessName={process ? process.name : ''}
+                    onNavigate={onNavigate}
+                    onlineCount={onlineCount}
+                    onExport={() => handleExportCSV(logs)}
+                    isFinished={isFinished}
+                    onFinish={handleFinishProcess}
+                    piStatusNode={(
+                        <div onClick={() => onNavigate('settings')} className="flex items-center gap-2 bg-[#1e1e1e] px-3 py-1.5 rounded-full border border-white/5 cursor-pointer hover:bg-white/5 transition mr-4">
+                            <div className={`w-2 h-2 rounded-full ${piStatus === 'Connected' ? 'bg-[#81c995] animate-pulse' : piStatus === 'Not Configured' ? 'bg-gray-400' : 'bg-[#f28b82]'}`}></div>
+                            <span className="text-xs text-white/70 whitespace-nowrap">
+                                {piStatus === 'Connected' ? 'PI 連線正常' :
+                                    piStatus === 'Not Configured' ? 'PI 未設定' : 'PI 離線'}
+                            </span>
+                        </div>
+                    )}
+                />
             </div>
 
-            {/* Bottom: BPMN (3/4) */}
-            <div className="flex-1 relative bg-white border-t-4 border-[#1e1e1e]">
+            {/* 2. BPMN Viewer (Flex Grow) */}
+            <div className="flex-1 relative bg-white border-t-4 border-[#1e1e1e] min-h-0">
                 <div ref={containerRef} className="w-full h-full operator-mode"></div>
+
+                {/* PI Connection Loading Overlay */}
+                {piConnecting && (
+                    <div className="absolute inset-0 bg-black/60 z-[100] flex flex-col items-center justify-center backdrop-blur-sm transition-all duration-300">
+                        <div className="bg-[#1e1e1e] p-6 rounded-2xl border border-white/10 shadow-2xl flex flex-col items-center gap-4">
+                            <div className="w-12 h-12 border-4 border-[#2d2d2d] border-t-[#8ab4f8] rounded-full animate-spin"></div>
+                            <div className="text-white/90 font-medium text-lg">正在連線 PI 系統...</div>
+                            <div className="text-white/50 text-xs">首次連線可能需要較長時間，請稍候</div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Import Overlay */}
+                {!process && (
+                    <div className="absolute inset-0 bg-black/80 z-50 flex flex-col items-center justify-center">
+                        <div className="text-white/40">Loading...</div>
+                    </div>
+                )}
 
                 {/* Zoom Controls */}
                 <div className="absolute bottom-4 right-4 flex flex-col gap-2 z-10">
                     <button onClick={() => handleZoom(0.2)} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] font-bold text-xl">+</button>
                     <button onClick={() => handleZoom(-0.2)} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] font-bold text-xl">-</button>
-                    <button onClick={() => viewerRef.current.get('canvas').zoom('fit-viewport')} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] text-xs">Fit</button>
+                    <button onClick={() => { if (viewerRef.current) viewerRef.current.get('canvas').zoom('fit-viewport'); }} className="w-10 h-10 bg-[#1e1e1e] text-white rounded-full shadow-lg hover:bg-[#333] text-xs">Fit</button>
                 </div>
 
-                {/* Floating Window */}
-                {showWindow && (
+                {/* Task Window */}
+                {showWindow && windowTask && (
                     <FloatingTaskWindow
                         task={windowTask}
-                        onStart={handleStartTask}
-                        onEnd={handleCompleteTask}
-                        onFinish={handleFinishProcess}
                         onClose={() => setShowWindow(false)}
+                        onStart={handleStartTask}
+                        onComplete={handleCompleteTask}
                         note={note}
                         setNote={setNote}
                         tagValues={tagValues}

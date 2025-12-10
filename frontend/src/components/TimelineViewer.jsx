@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { formatTimelineTime } from '../utilities';
 
-const TimelineViewer = ({ logs, headerActions, onUpdateLog }) => {
+const TimelineViewer = ({ logs, headerActions, onUpdateLog, piStatusNode }) => {
     const scrollRef = useRef(null);
 
     useEffect(() => {
@@ -21,6 +21,7 @@ const TimelineViewer = ({ logs, headerActions, onUpdateLog }) => {
                     </div>
                 </div>
                 <div className="flex items-center gap-4">
+                    {piStatusNode}
                     <span className="text-xs text-white/30">{logs.length} 筆紀錄</span>
                     {headerActions}
                 </div>

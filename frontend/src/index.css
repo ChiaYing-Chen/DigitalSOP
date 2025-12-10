@@ -7,35 +7,63 @@
     --md-sys-color-background: #121212;
     --md-sys-color-surface: #1e1e1e;
     --md-sys-color-surface-variant: #2d2d2d;
-    --md-sys-color-primary: #8ab4f8; /* Google Blue 200 */
+    --md-sys-color-primary: #8ab4f8;
+    /* Google Blue 200 */
     --md-sys-color-on-primary: #002d6f;
     --md-sys-color-secondary: #e8eaed;
-    --md-sys-color-error: #f28b82; /* Red 200 */
-    --md-sys-color-success: #81c995; /* Green 200 */
+    --md-sys-color-error: #f28b82;
+    /* Red 200 */
+    --md-sys-color-success: #81c995;
+    /* Green 200 */
     --md-sys-color-on-surface: #e3e3e3;
     --md-sys-color-on-surface-variant: #c4c7c5;
     --md-sys-color-outline: #8e918f;
 }
 
-body { 
-    font-family: 'Roboto', 'Inter', sans-serif; 
+html,
+body,
+#root {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+}
+
+body {
+    font-family: 'Roboto', 'Inter', sans-serif;
     background-color: var(--md-sys-color-background);
     color: var(--md-sys-color-on-surface);
 }
 
-.bpmn-container { 
-    height: 100%; 
-    width: 100%; 
-    background: #fff; /* Canvas remains white for contrast */
-    color: #1e293b; 
+.bpmn-container {
+    height: 100%;
+    width: 100%;
+    background: #fff;
+    /* Canvas remains white for contrast */
+    color: #1e293b;
 }
-.bjs-powered-by { display: none; }
+
+.bjs-powered-by {
+    display: none;
+}
 
 /* Custom Scrollbar */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: var(--md-sys-color-background); }
-::-webkit-scrollbar-thumb { background: var(--md-sys-color-surface-variant); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: var(--md-sys-color-outline); }
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--md-sys-color-background);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--md-sys-color-surface-variant);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--md-sys-color-outline);
+}
 
 /* --- BPMN Editor Fixes --- */
 
@@ -50,12 +78,13 @@ body {
     display: flex;
     justify-content: center;
     align-items: center;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
     transition: all 0.2s;
 }
 
 .djs-context-pad .entry:hover {
-    background-color: #eff6ff !important; /* Blue-50 */
+    background-color: #eff6ff !important;
+    /* Blue-50 */
     border-color: #3b82f6;
     transform: scale(1.1);
 }
@@ -69,7 +98,7 @@ body {
 }
 
 /* 1. Fix Direct Editing Text Color (was too pale on white canvas) */
-.djs-direct-editing-parent, 
+.djs-direct-editing-parent,
 .djs-direct-editing-content {
     color: #000000 !important;
     background: #ffffff !important;
@@ -81,7 +110,8 @@ body {
     background: #f8fafc;
     border: 1px solid #cbd5e1;
     border-radius: 4px;
-    position: absolute; /* Ensure it's absolute for dragging */
+    position: absolute;
+    /* Ensure it's absolute for dragging */
     top: 20px;
     left: 20px;
     user-select: none;
@@ -97,6 +127,7 @@ body {
     justify-content: center;
     align-items: center;
 }
+
 .palette-handle::after {
     content: "::::";
     color: #94a3b8;
@@ -120,6 +151,7 @@ body {
     margin-bottom: 4px;
     padding-bottom: 4px;
 }
+
 .djs-palette .group:last-child {
     border-bottom: none;
 }
@@ -133,6 +165,7 @@ body {
     justify-content: center;
     align-items: center;
 }
+
 .djs-palette .separator {
     display: none !important;
 }
@@ -149,12 +182,25 @@ body {
 
 /* Active Task Highlight */
 @keyframes blink {
-    0% { opacity: 0.4; stroke-width: 4px; }
-    50% { opacity: 1; stroke-width: 6px; }
-    100% { opacity: 0.4; stroke-width: 4px; }
+    0% {
+        opacity: 0.4;
+        stroke-width: 4px;
+    }
+
+    50% {
+        opacity: 1;
+        stroke-width: 6px;
+    }
+
+    100% {
+        opacity: 0.4;
+        stroke-width: 4px;
+    }
 }
-.djs-element.highlight .djs-visual > :nth-child(1) {
-    stroke: #8ab4f8 !important; /* Google Blue 200 */
+
+.djs-element.highlight .djs-visual> :nth-child(1) {
+    stroke: #8ab4f8 !important;
+    /* Google Blue 200 */
     stroke-width: 4px !important;
     fill: rgba(138, 180, 248, 0.1) !important;
     filter: drop-shadow(0 0 8px rgba(138, 180, 248, 0.6));
@@ -162,8 +208,9 @@ body {
 }
 
 /* Completed Task Style */
-.djs-element.completed-task .djs-visual > :nth-child(1) {
-    fill: #81c995 !important; /* Green fill matching timeline */
+.djs-element.completed-task .djs-visual> :nth-child(1) {
+    fill: #81c995 !important;
+    /* Green fill matching timeline */
     stroke: #0f5132 !important;
 }
 
@@ -173,40 +220,61 @@ body {
     border: 1px solid #444 !important;
     color: #e3e3e3 !important;
 }
+
 .djs-popup .entry {
     color: #e3e3e3 !important;
 }
+
 .djs-popup .entry:hover {
     background-color: #333 !important;
     color: #fff !important;
 }
+
 .djs-popup-header {
     border-bottom: 1px solid #444 !important;
 }
+
 .djs-popup-body .entry.active {
     background-color: #333 !important;
 }
 
 /* Operator Mode Cursor Overrides */
 .operator-mode .djs-hit,
-.operator-mode .djs-visual rect, 
-.operator-mode .djs-visual circle, 
-.operator-mode .djs-visual polygon, 
+.operator-mode .djs-visual rect,
+.operator-mode .djs-visual circle,
+.operator-mode .djs-visual polygon,
 .operator-mode .djs-visual path,
-.operator-mode .djs-element { cursor: default !important; }
+.operator-mode .djs-element {
+    cursor: default !important;
+}
 
 .operator-mode .djs-element.has-hyperlink .djs-hit,
-.operator-mode .djs-element.has-hyperlink .djs-visual * { cursor: pointer !important; }
+.operator-mode .djs-element.has-hyperlink .djs-visual * {
+    cursor: pointer !important;
+}
 
-.operator-mode .djs-cursor-move { cursor: default !important; } /* Disable crosshair */
-.operator-mode .djs-element:hover .djs-outline { stroke-width: 2px; stroke: #8ab4f8; } /* Optional hover effect */
+.operator-mode .djs-cursor-move {
+    cursor: default !important;
+}
+
+/* Disable crosshair */
+.operator-mode .djs-element:hover .djs-outline {
+    stroke-width: 2px;
+    stroke: #8ab4f8;
+}
+
+/* Optional hover effect */
 
 /* Review Mode Cursor Overrides */
 .review-mode .djs-hit,
-.review-mode .djs-visual rect, 
-.review-mode .djs-visual circle, 
-.review-mode .djs-visual polygon, 
+.review-mode .djs-visual rect,
+.review-mode .djs-visual circle,
+.review-mode .djs-visual polygon,
 .review-mode .djs-visual path,
-.review-mode .djs-element { cursor: default !important; }
+.review-mode .djs-element {
+    cursor: default !important;
+}
 
-.review-mode .djs-cursor-move { cursor: default !important; }
+.review-mode .djs-cursor-move {
+    cursor: default !important;
+}
