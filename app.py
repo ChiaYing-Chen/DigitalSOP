@@ -19,20 +19,34 @@ CORS(app)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, 'sops.db')
 
+# --- Logging Setup for Startup Analysis ---
+import time
+STARTUP_LOG = os.path.join(BASE_DIR, 'startup_stats.log')
+def log_startup(msg):
+    with open(STARTUP_LOG, 'a', encoding='utf-8') as f:
+        f.write(f"{datetime.datetime.now()} - {msg}\n")
+
+log_startup("App initialization started")
+
 # --- PIconnect Integration (Mock Fallback) ---
 PI = None
+t_start_pi = time.time()
 try:
+    log_startup("Importing PIconnect...")
     import PIconnect as PI
     PI_AVAILABLE = True
     # PI.PIConfig.DEFAULT_SERVER_NAME = "MyPIServer" # Uncomment and set if needed
+    log_startup(f"PIconnect imported successfully in {time.time() - t_start_pi:.4f}s")
 except ImportError:
     PI_AVAILABLE = False
+    log_startup(f"PIconnect not found. (Took {time.time() - t_start_pi:.4f}s)")
     print("PIconnect not found. PI Server Offline.")
 except Exception as e:
     PI_AVAILABLE = False
+    log_startup(f"PIconnect init failed: {e} (Took {time.time() - t_start_pi:.4f}s)")
     print(f"PIconnect initialization failed: {e}. PI Server Offline.")
 
-    print(f"PIconnect initialization failed: {e}. PI Server Offline.")
+log_startup("App initialization finished")
 
 # --- Database Setup ---
 @contextmanager
