@@ -19,8 +19,9 @@ const Operator = ({ processId, onNavigate }) => {
     const [tagValues, setTagValues] = useState([]);
     const [loadingTag, setLoadingTag] = useState(false);
     const [piConnecting, setPiConnecting] = useState(false);
-    const [piStatus, setPiStatus] = useState('Checking...'); // PI Status for Operator
+    const [piStatus, setPiStatus] = useState('Checking...');
     const [onlineCount, setOnlineCount] = useState(1);
+    const [isTimelineCollapsed, setIsTimelineCollapsed] = useState(false);
     const userId = useMemo(() => 'user_' + Math.random().toString(36).substr(2, 9), []);
 
     // Zoom
@@ -947,54 +948,47 @@ const Operator = ({ processId, onNavigate }) => {
     }, [processId, userId]);
 
     const headerActions = (
-        <div className="flex gap-2 items-center">
-            <div className="bg-[#2d2d2d] px-3 py-1 rounded-full flex items-center gap-2 border border-white/10 mr-2" title="在線人數">
-                <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                </span>
-                <span className="text-white/80 text-xs font-medium">{onlineCount} 人在線</span>
-            </div>
-
-            <button
-                onClick={() => handleExportCSV(logs)}
-                className="bg-[#81c995] hover:bg-[#a8dab5] text-[#0f5132] px-4 py-1 rounded-full font-medium shadow-sm transition text-sm"
-            >
-                匯出 CSV
+        <div className="flex items-center gap-2">
+            <button onClick={() => handleExportCSV(logs)} className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 p-2 rounded-full transition" title="匯出 CSV">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                </svg>
             </button>
-
             {!isFinished && (
-                <button
-                    onClick={handleFinishProcess}
-                    className="bg-[#f28b82] hover:bg-[#f6aea9] text-[#5c1e1e] px-6 py-1 rounded-full font-medium shadow-sm transition text-sm"
-                >
-                    結束流程
+                <button onClick={handleFinishProcess} className="bg-[#f28b82] hover:bg-[#f6aea9] text-[#601410] px-4 py-1.5 rounded-full text-xs font-bold transition">
+                    結束
                 </button>
             )}
-
+            <button onClick={() => onNavigate('dashboard')} className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 p-2 rounded-full transition" title="返回首頁">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+                </svg>
+            </button>
             <button
-                onClick={() => onNavigate('dashboard')}
-                className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 px-4 py-1 rounded-full text-sm font-medium transition"
+                onClick={() => setIsTimelineCollapsed(!isTimelineCollapsed)}
+                className="bg-[#2d2d2d] hover:bg-[#3c3c3c] text-white/80 p-2 rounded-full transition ml-2"
+                title={isTimelineCollapsed ? "展開時間軸" : "收合時間軸"}
             >
-                返回首頁
+                {isTimelineCollapsed ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                    </svg>
+                ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
+                    </svg>
+                )}
             </button>
         </div>
     );
 
     return (
         <div className="flex flex-col h-full bg-[#1e1e1e]">
-            {/* 1. Timeline (Fixed Height) */}
-            <div className="h-1/3 min-h-[250px] border-b border-white/10 relative z-10 shrink-0">
+            {/* 1. Timeline (Collapsible) */}
+            <div className={`${isTimelineCollapsed ? 'h-[54px] min-h-[54px]' : 'h-1/5 min-h-[160px]'} border-b border-white/10 relative z-10 shrink-0 transition-all duration-300 ease-in-out`}>
                 <TimelineViewer
                     logs={logs}
-                    totalSteps={process ? (process.xml_content.match(/<bpmn:task/g) || []).length : 0}
-                    currentStep={logs.length}
-                    activeProcessName={process ? process.name : ''}
-                    onNavigate={onNavigate}
-                    onlineCount={onlineCount}
-                    onExport={() => handleExportCSV(logs)}
-                    isFinished={isFinished}
-                    onFinish={handleFinishProcess}
+                    headerActions={headerActions}
                     piStatusNode={(
                         <div onClick={() => onNavigate('settings')} className="flex items-center gap-2 bg-[#1e1e1e] px-3 py-1.5 rounded-full border border-white/5 cursor-pointer hover:bg-white/5 transition mr-4">
                             <div className={`w-2 h-2 rounded-full ${piStatus === 'Connected' ? 'bg-[#81c995] animate-pulse' : piStatus === 'Not Configured' ? 'bg-gray-400' : 'bg-[#f28b82]'}`}></div>
@@ -1004,6 +998,7 @@ const Operator = ({ processId, onNavigate }) => {
                             </span>
                         </div>
                     )}
+                    onUpdateLog={handleUpdateLog}
                 />
             </div>
 
@@ -1042,7 +1037,7 @@ const Operator = ({ processId, onNavigate }) => {
                         task={windowTask}
                         onClose={() => setShowWindow(false)}
                         onStart={handleStartTask}
-                        onComplete={handleCompleteTask}
+                        onEnd={handleCompleteTask}
                         note={note}
                         setNote={setNote}
                         tagValues={tagValues}
