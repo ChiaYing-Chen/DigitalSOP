@@ -26,7 +26,7 @@ const TimelineViewer = ({ logs, headerActions, onUpdateLog, piStatusNode }) => {
                     {headerActions}
                 </div>
             </div>
-            <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden flex items-start px-6 gap-8 scrollbar-thin pt-4 pb-8" onWheel={(e) => {
+            <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden flex items-start px-6 gap-8 scrollbar-thin py-3" onWheel={(e) => {
                 if (scrollRef.current) {
                     scrollRef.current.scrollLeft += e.deltaY;
                 }
@@ -42,16 +42,16 @@ const TimelineViewer = ({ logs, headerActions, onUpdateLog, piStatusNode }) => {
                         )}
 
                         {/* Node Circle */}
-                        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold z-10 mb-2 shadow-lg transition-transform group-hover:scale-110 ${log.message.includes('任務完成') ? 'bg-[#81c995] text-[#0f5132]' : 'bg-[#8ab4f8] text-[#002d6f]'
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 mb-1 shadow-lg transition-transform group-hover:scale-110 ${log.message.includes('任務完成') ? 'bg-[#81c995] text-[#0f5132]' : 'bg-[#8ab4f8] text-[#002d6f]'
                             }`}>
                             {idx + 1}
                         </div>
 
-                        <div className="text-xs text-white/50 mt-1">{formatTimelineTime(log.time)}</div>
-                        <div className="text-sm font-medium text-white/90 mt-1 text-center px-2">{log.message.split(': ')[1] || log.message}</div>
+                        <div className="text-xs text-white/50 mt-0.5">{formatTimelineTime(log.time)}</div>
+                        <div className="text-sm font-medium text-white/90 mt-0.5 text-center px-2">{log.message.split(': ')[1] || log.message}</div>
 
                         {/* Indicators Container */}
-                        <div className="flex gap-2 mt-2">
+                        <div className="flex gap-2 mt-1.5">
                             {/* Note Indicator */}
                             {log.note && (
                                 <div

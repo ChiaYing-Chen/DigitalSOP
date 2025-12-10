@@ -213,7 +213,7 @@ const Operator = ({ processId, onNavigate }) => {
                 'connection.segment.move.start',
                 'bendlpoints.move.start',
                 'connection.layout.start',
-                'element.mousedown' // Careful with this one, might block selection. But we need click.
+                'connection.layout.start'
             ];
 
             // We only want to block mousedown if it leads to a move/edit. 
@@ -482,35 +482,6 @@ const Operator = ({ processId, onNavigate }) => {
 
     // Always On PI Display Manager - Cleanup overlaps with above load, but kept separate in original for clarity.
     // Merged into Load above for cleaner React lifecycle handling.
-
-    useEffect(() => {
-        const container = containerRef.current;
-        if (!container) return;
-
-        const onWheel = (e) => {
-            if (viewerRef.current) {
-                // Allow Zoom (Ctrl + Wheel)
-                if (e.ctrlKey || e.metaKey) return;
-
-                e.preventDefault();
-                e.stopPropagation();
-
-                const canvas = viewerRef.current.get('canvas');
-                const viewbox = canvas.viewbox();
-
-                // Move viewbox x by deltaY
-                canvas.viewbox({
-                    x: viewbox.x + e.deltaY,
-                    y: viewbox.y,
-                    width: viewbox.width,
-                    height: viewbox.height
-                });
-            }
-        };
-
-        container.addEventListener('wheel', onWheel, { passive: false, capture: true });
-        return () => container.removeEventListener('wheel', onWheel, { capture: true });
-    }, []);
 
     // Reactive Visual Sync (BPMN Markers & State)
     useEffect(() => {
@@ -985,7 +956,7 @@ const Operator = ({ processId, onNavigate }) => {
     return (
         <div className="flex flex-col h-full bg-[#1e1e1e]">
             {/* 1. Timeline (Collapsible) */}
-            <div className={`${isTimelineCollapsed ? 'h-[54px] min-h-[54px]' : 'h-1/5 min-h-[160px]'} border-b border-white/10 relative z-10 shrink-0 transition-all duration-300 ease-in-out`}>
+            <div className={`${isTimelineCollapsed ? 'h-[54px] min-h-[54px]' : 'h-1/5 min-h-[160px]'} border-b border-white/10 relative z-10 shrink-0 transition-all duration-300 ease-in-out overflow-hidden`}>
                 <TimelineViewer
                     logs={logs}
                     headerActions={headerActions}
