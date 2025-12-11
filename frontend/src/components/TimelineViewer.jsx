@@ -26,7 +26,7 @@ const TimelineViewer = ({ logs, headerActions, onUpdateLog, piStatusNode }) => {
                     {headerActions}
                 </div>
             </div>
-            <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden flex items-start px-6 gap-8 scrollbar-thin py-3" onWheel={(e) => {
+            <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden flex items-start px-6 gap-8 scrollbar-thin pt-3 pb-8" onWheel={(e) => {
                 if (scrollRef.current) {
                     scrollRef.current.scrollLeft += e.deltaY;
                 }

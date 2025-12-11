@@ -202,6 +202,33 @@ const Operator = ({ processId, onNavigate }) => {
             const elementRegistry = viewer.get('elementRegistry');
             const canvas = viewer.get('canvas');
 
+            // 5. Custom Wheel Interaction (Zoom/Pan)
+            const container = containerRef.current;
+            const handleWheel = (event) => {
+                if (event.ctrlKey) {
+                    // Zoom
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const zoom = canvas.zoom();
+                    const newZoom = zoom - (event.deltaY * 0.001);
+                    canvas.zoom(newZoom, {
+                        x: event.clientX - container.getBoundingClientRect().left,
+                        y: event.clientY - container.getBoundingClientRect().top
+                    });
+                } else {
+                    // Horizontal Scroll
+                    event.preventDefault();
+                    event.stopPropagation();
+                    canvas.scroll({ dx: -event.deltaY, dy: 0 });
+                }
+            };
+            if (container) {
+                container.addEventListener('wheel', handleWheel, { passive: false });
+                viewer.on('destroy', () => {
+                    container.removeEventListener('wheel', handleWheel);
+                });
+            }
+
             // Disable default interactions
             const events = [
                 'shape.move.start',
@@ -977,16 +1004,7 @@ const Operator = ({ processId, onNavigate }) => {
             <div className="flex-1 relative bg-white border-t-4 border-[#1e1e1e] min-h-0">
                 <div ref={containerRef} className="w-full h-full operator-mode"></div>
 
-                {/* PI Connection Loading Overlay */}
-                {piConnecting && (
-                    <div className="absolute inset-0 bg-black/60 z-[100] flex flex-col items-center justify-center backdrop-blur-sm transition-all duration-300">
-                        <div className="bg-[#1e1e1e] p-6 rounded-2xl border border-white/10 shadow-2xl flex flex-col items-center gap-4">
-                            <div className="w-12 h-12 border-4 border-[#2d2d2d] border-t-[#8ab4f8] rounded-full animate-spin"></div>
-                            <div className="text-white/90 font-medium text-lg">正在連線 PI 系統...</div>
-                            <div className="text-white/50 text-xs">首次連線可能需要較長時間，請稍候</div>
-                        </div>
-                    </div>
-                )}
+
 
                 {/* Import Overlay */}
                 {!process && (
