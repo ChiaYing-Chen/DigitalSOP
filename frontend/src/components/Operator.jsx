@@ -224,8 +224,47 @@ const Operator = ({ processId, onNavigate }) => {
             };
             if (container) {
                 container.addEventListener('wheel', handleWheel, { passive: false });
+
+                // 6. Custom Mouse Drag (Pan)
+                let isDragging = false;
+                let lastX, lastY;
+
+                const handleMouseDown = (event) => {
+                    // Left click (0), no checks on target to allow "drag anywhere" style, 
+                    // providing it doesn't conflict with interactive elements logic too much.
+                    // Ideally, we should check if we clicked on an empty space, but users want to drag "the view".
+                    if (event.button === 0) {
+                        isDragging = true;
+                        lastX = event.clientX;
+                        lastY = event.clientY;
+                        container.style.cursor = 'grabbing';
+                    }
+                };
+
+                const handleMouseMove = (event) => {
+                    if (isDragging) {
+                        const dx = event.clientX - lastX;
+                        const dy = event.clientY - lastY;
+                        canvas.scroll({ dx: dx, dy: dy });
+                        lastX = event.clientX;
+                        lastY = event.clientY;
+                    }
+                };
+
+                const handleMouseUp = () => {
+                    isDragging = false;
+                    container.style.cursor = 'default';
+                };
+
+                container.addEventListener('mousedown', handleMouseDown);
+                window.addEventListener('mousemove', handleMouseMove);
+                window.addEventListener('mouseup', handleMouseUp);
+
                 viewer.on('destroy', () => {
                     container.removeEventListener('wheel', handleWheel);
+                    container.removeEventListener('mousedown', handleMouseDown);
+                    window.removeEventListener('mousemove', handleMouseMove);
+                    window.removeEventListener('mouseup', handleMouseUp);
                 });
             }
 
@@ -983,7 +1022,7 @@ const Operator = ({ processId, onNavigate }) => {
     return (
         <div className="flex flex-col h-full bg-[#1e1e1e]">
             {/* 1. Timeline (Collapsible) */}
-            <div className={`${isTimelineCollapsed ? 'h-[54px] min-h-[54px]' : 'h-1/5 min-h-[160px]'} border-b border-white/10 relative z-10 shrink-0 transition-all duration-300 ease-in-out overflow-hidden`}>
+            <div className={`${isTimelineCollapsed ? 'h-[54px] min-h-[54px]' : 'h-1/5 min-h-[220px]'} border-b border-white/10 relative z-10 shrink-0 transition-all duration-300 ease-in-out overflow-hidden`}>
                 <TimelineViewer
                     logs={logs}
                     headerActions={headerActions}
